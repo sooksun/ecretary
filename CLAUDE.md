@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-M-Secretary V1.3 — mobile-first AI meeting secretary. Old Android phones act as the recording device ("ears + notepad"); a NestJS API + BullMQ worker do storage, transcription, and summarization ("brain"). The mock and real provider implementations live side-by-side in `apps/worker/src/ai/`; pipeline runs end-to-end on mocks today, and real `faster-whisper` (M3) and Claude LLM (M4) are selected via env vars (`AI_PROVIDER=whisper`, `LLM_PROVIDER=claude`). The pending cut-line items are an end-to-end real-device smoke (M1) and PDF/DOCX export (M6).
+M-Secretary V1.3 — mobile-first AI meeting secretary. Old Android phones act as the recording device ("ears + notepad"); a NestJS API + BullMQ worker do storage, transcription, and summarization ("brain"). The mock and real provider implementations live side-by-side in `apps/worker/src/ai/`; pipeline runs end-to-end on mocks today, and real `faster-whisper` (M3) and Claude LLM (M4) are selected via env vars (`AI_PROVIDER=whisper`, `LLM_PROVIDER=claude`). The remaining cut-line item is an end-to-end real-device smoke (M1).
 
 ## Layout
 
@@ -109,7 +109,7 @@ No unit tests are configured for `@msec/api`, `@msec/worker`, or `@msec/shared` 
 
 **Android networking.** Emulator → host = `http://10.0.2.2:3000/api/v1` (default). Real device → use the laptop LAN IP and open Windows firewall on port 3000.
 
-**Exports.** `POST /meetings/:id/exports` currently returns 501 — Phase 5 / M6 not started. Don't claim export works.
+**Exports (M6).** `POST /meetings/:id/exports` accepts `{exportType: "DOCX" | "PDF" | "TRANSCRIPT_TXT"}` and returns `{id, filePath, downloadUrl, ...}`. The signed `downloadUrl` is good for 1 hour. DOCX uses `docx`, PDF uses `pdfmake` with bundled Sarabun fonts in `apps/api/assets/fonts/` (TH gov "TH Sarabun New"-equivalent). PDF rendering throws `ServiceUnavailableException` if the font files are missing — DOCX still works because Word/LibreOffice supplies fonts at open time. The official-minutes layout (header, attendees, agenda items, action-items table, signer block, AI quality footnote) lives in `render/{docx,pdf}-renderer.ts` — keep both renderers in sync when adding fields.
 
 **Compose profiles.** `docker compose up -d redis minio` brings up only the dev infrastructure. Postgres lives in profile `db` (most dev machines have host Postgres on 5432 already — Laragon, Postgres installer, etc.); add `--profile db` if you don't. Whisper lives in profile `ai` (`docker compose --profile ai up -d whisper`). API + worker images live in profile `app` for production-style runs.
 
