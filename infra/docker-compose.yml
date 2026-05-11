@@ -124,6 +124,34 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  # ─── Reverse proxy + TLS (--profile prod) ────────────────────────────
+  # Run alongside the `app` profile when exposing the stack to the public
+  # internet:  docker compose --profile app --profile prod up -d
+  # Required env (set in root .env.production):
+  #   PROD_API_DOMAIN    e.g. api.your-domain.com
+  #   PROD_FILES_DOMAIN  e.g. files.your-domain.com
+  #   ACME_EMAIL         contact email for Let's Encrypt rate-limit warnings
+  caddy:
+    image: caddy:2-alpine
+    container_name: msec-caddy
+    profiles: ["prod"]
+    restart: unless-stopped
+    depends_on:
+      api: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    environment:
+      PROD_API_DOMAIN: ${PROD_API_DOMAIN}
+      PROD_FILES_DOMAIN: ${PROD_FILES_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data           # ACME certs + state — persist across restarts
+      - caddy_config:/config       # auto-managed config snapshots
+
   # ─── AI services (--profile ai) ──────────────────────────────────────
   whisper:
     build:
@@ -155,3 +183,5 @@ volumes:
   pgdata:
   miniodata:
   whisper_models:
+  caddy_data:
+  caddy_config:

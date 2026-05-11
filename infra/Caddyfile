@@ -1,0 +1,55 @@
+# Caddyfile — TLS-terminating reverse proxy for the prod m-secretary stack.
+#
+# Caddy handles ACME (Let's Encrypt) automatically. The two requirements:
+#   1. Both PROD_API_DOMAIN and PROD_FILES_DOMAIN resolve via DNS A/AAAA
+#      to the public IP of the host running this Caddy container.
+#   2. Inbound ports 80 and 443 are reachable from the public internet
+#      (so the ACME HTTP-01 challenge can complete).
+#
+# Domains are env-injected from .env.production:
+#   PROD_API_DOMAIN     e.g. api.your-domain.com
+#   PROD_FILES_DOMAIN   e.g. files.your-domain.com
+#
+# Global options block —
+{
+  # Production ACME endpoint. Drop --staging from your test runs by
+  # commenting this line; uncomment to use staging while debugging cert
+  # issuance (avoid rate-limit lockout from the prod endpoint).
+  # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+  email {$ACME_EMAIL}
+}
+
+# API — proxies to the NestJS container.
+# `/api/v1/*` is the only mounted prefix; everything else 404s at Caddy
+# (no fallthrough to admin/internal endpoints).
+{$PROD_API_DOMAIN} {
+  encode gzip zstd
+
+  # Forwarded headers so the API sees the original client IP for rate
+  # limiting (currently @nestjs/throttler).
+  reverse_proxy api:3000 {
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-For {remote_host}
+    header_up X-Forwarded-Proto {scheme}
+  }
+
+  log {
+    output stdout
+    format console
+  }
+}
+
+# Object storage — proxies to MinIO. Required because the API hands clients
+# pre-signed download URLs that point at this hostname; clients (including
+# the mobile app's Linking.openURL) need HTTPS to open them at all on
+# modern Android/iOS without falling foul of cleartext-traffic policy.
+{$PROD_FILES_DOMAIN} {
+  encode gzip zstd
+
+  reverse_proxy minio:9000 {
+    header_up Host {host}
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-For {remote_host}
+    header_up X-Forwarded-Proto {scheme}
+  }
+}
