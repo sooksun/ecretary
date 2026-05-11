@@ -113,6 +113,12 @@ No unit tests are configured for `@msec/api`, `@msec/worker`, or `@msec/shared` 
 
 **Compose profiles.** `docker compose up -d redis minio` brings up only the dev infrastructure. Postgres lives in profile `db` (most dev machines have host Postgres on 5432 already — Laragon, Postgres installer, etc.); add `--profile db` if you don't. Whisper lives in profile `ai` (`docker compose --profile ai up -d whisper`). API + worker images live in profile `app` for production-style runs.
 
+**Production env files (git-ignored).** Two locations to fill in before `docker compose --profile app up -d`:
+- `.env.production` (root) — `AI_PROVIDER=whisper`, `LLM_PROVIDER=claude`, real `ANTHROPIC_API_KEY`. The worker preflight will refuse to boot if mock providers are set with `NODE_ENV=production`.
+- `apps/mobile/.env.production` — `EXPO_PUBLIC_API_BASE_URL` set to the public HTTPS URL of the production API. Picked up by Expo at release-build time (`eas build --profile=production`). Localhost / LAN IPs will not work on installed APKs.
+
+Both files have `REPLACE_WITH_*` placeholders; running with the placeholder values will fail at boot (preflight) or at first network call (mobile).
+
 ## Conventions
 
 - API global prefix: `/api/v1` (set via `API_GLOBAL_PREFIX`).
