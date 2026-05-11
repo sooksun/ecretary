@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "M-Secretary",
+    "slug": "msecretary",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0f172a"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.msecretary.app",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "ใช้ไมโครโฟนเพื่อบันทึกเสียงการประชุม",
+        "UIBackgroundModes": ["audio"]
+      }
+    },
+    "android": {
+      "package": "com.msecretary.app",
+      "permissions": [
+        "RECORD_AUDIO",
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_EXTERNAL_STORAGE",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_MICROPHONE",
+        "WAKE_LOCK",
+        "POST_NOTIFICATIONS",
+        "ACCESS_NETWORK_STATE",
+        "INTERNET"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-av",
+        {
+          "microphonePermission": "ใช้ไมโครโฟนเพื่อบันทึกเสียงการประชุม"
+        }
+      ]
+    ]
+  }
+}

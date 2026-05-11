@@ -1,0 +1,38 @@
+{
+  "name": "m-secretary",
+  "version": "1.3.0",
+  "private": true,
+  "description": "M-Secretary V1.3 — Mobile-first AI Meeting Secretary monorepo",
+  "workspaces": [
+    "packages/*",
+    "apps/api",
+    "apps/worker"
+  ],
+  "scripts": {
+    "sync:env": "node -e \"const fs=require('fs');for(const t of ['apps/api/.env','apps/worker/.env']){fs.copyFileSync('.env',t);console.log('synced ->',t)}\"",
+    "build:shared": "npm --workspace @msec/shared run build",
+    "build:api": "npm --workspace @msec/api run build",
+    "build:worker": "npm --workspace @msec/worker run build",
+    "build": "npm run build:shared && npm run build:api && npm run build:worker",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "predev:api": "npm run sync:env",
+    "predev:worker": "npm run sync:env",
+    "preprisma:generate": "npm run sync:env",
+    "preprisma:migrate": "npm run sync:env",
+    "preprisma:seed": "npm run sync:env",
+    "dev:api": "npm --workspace @msec/api run start:dev",
+    "dev:worker": "npm --workspace @msec/worker run start:dev",
+    "prisma:generate": "npm --workspace @msec/api run prisma:generate",
+    "prisma:migrate": "npm --workspace @msec/api run prisma:migrate",
+    "prisma:seed": "npm --workspace @msec/api run prisma:seed",
+    "compose:up": "docker compose -f infra/docker-compose.yml up -d",
+    "compose:down": "docker compose -f infra/docker-compose.yml down",
+    "compose:logs": "docker compose -f infra/docker-compose.yml logs -f",
+    "infra:up": "docker compose -f infra/docker-compose.yml --profile ai up -d redis minio whisper",
+    "doctor": "ts-node --transpile-only --project scripts/tsconfig.json scripts/doctor.ts"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "UNLICENSED"
+}

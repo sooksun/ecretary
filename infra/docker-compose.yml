@@ -1,0 +1,157 @@
+services:
+  # NOTE: Postgres ถูกใส่ profile "db" ไว้ — default `up -d` จะไม่รัน
+  # เครื่อง dev ส่วนมากมี Postgres บน host อยู่แล้ว (Postgres 15 จาก installer ฯลฯ)
+  # ถ้าเครื่องคุณ "ไม่มี" Postgres บน host:
+  #   docker compose -f infra/docker-compose.yml --profile db up -d
+  postgres:
+    image: postgres:16-alpine
+    container_name: msec-postgres
+    profiles: ["db"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: msecretary
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d msecretary"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: msec-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: msec-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Application services (built from monorepo Dockerfiles) ────────────
+  # Use --profile app to also build/run the API + worker images.
+  # Inside containers Postgres on the Windows host is reachable via host.docker.internal
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    container_name: msec-api
+    profiles: ["app"]
+    depends_on:
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      API_PORT: 3000
+      API_GLOBAL_PREFIX: api/v1
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:-msecretary}
+      S3_FORCE_PATH_STYLE: "true"
+      MAX_CHUNK_SIZE_MB: 50
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-6}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  worker:
+    build:
+      context: ..
+      dockerfile: apps/worker/Dockerfile
+    container_name: msec-worker
+    profiles: ["app"]
+    depends_on:
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:-msecretary}
+      S3_FORCE_PATH_STYLE: "true"
+      AI_PROVIDER: ${AI_PROVIDER:-mock}
+      WHISPER_ENDPOINT: ${WHISPER_ENDPOINT:-http://whisper:9001}
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-th}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-6}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      WORKER_CONCURRENCY_TRANSCRIBE: ${WORKER_CONCURRENCY_TRANSCRIBE:-2}
+      WORKER_CONCURRENCY_SUMMARY: ${WORKER_CONCURRENCY_SUMMARY:-1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ─── AI services (--profile ai) ──────────────────────────────────────
+  whisper:
+    build:
+      context: whisper
+      dockerfile: Dockerfile
+    container_name: msec-whisper
+    profiles: ["ai"]
+    environment:
+      WHISPER_MODEL: medium
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+      WHISPER_DEFAULT_LANG: th
+      WHISPER_BEAM_SIZE: 1
+      WHISPER_VAD: "true"
+    ports:
+      # MinIO console occupies host:9001 — expose whisper on host:9101
+      # (internal port stays 9001; worker reaches it via http://whisper:9001 inside the network)
+      - "9101:9001"
+    volumes:
+      - whisper_models:/models
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; urllib.request.urlopen('http://localhost:9001/health'); sys.exit(0)\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  pgdata:
+  miniodata:
+  whisper_models:

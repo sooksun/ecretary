@@ -1,0 +1,7 @@
+{
+  "name": "m-secretary-recorder",
+  "version": "0.1.0",
+  "description": "M-Secretary native foreground audio recorder (Android)",
+  "main": "src/index.ts",
+  "private": true
+}

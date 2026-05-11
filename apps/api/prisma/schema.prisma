@@ -1,0 +1,294 @@
+// M-Secretary V1.3 — Prisma schema
+// Source of truth for the API service.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── enums ──────────────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  RECORDER
+  EDITOR
+  VIEWER
+}
+
+enum MeetingStatus {
+  DRAFT
+  RECORDING
+  UPLOADING
+  PROCESSING
+  TRANSCRIBING
+  SUMMARIZING
+  READY
+  FAILED
+  ARCHIVED
+}
+
+enum MeetingType {
+  GENERAL
+  SCHOOL_ADMIN
+  PLC
+  PROJECT
+  PARENT_MEETING
+  COMMITTEE
+  TRAINING
+  SUPERVISION
+}
+
+enum ChunkUploadStatus {
+  LOCAL_ONLY
+  QUEUED
+  UPLOADING
+  UPLOADED
+  PROCESSING
+  TRANSCRIBED
+  FAILED_RETRY
+  FAILED_FINAL
+  DONE
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  NEEDS_REVIEW
+}
+
+enum MarkerType {
+  IMPORTANT
+  DECISION
+  ACTION
+  ISSUE
+  QUESTION
+  OTHER
+}
+
+enum ActionStatus {
+  PENDING
+  IN_PROGRESS
+  DONE
+  OVERDUE
+  NEED_CLARIFICATION
+  CANCELLED
+}
+
+enum ExportType {
+  PDF
+  DOCX
+  TRANSCRIPT_TXT
+}
+
+enum ActionItemSource {
+  AI
+  MANUAL
+}
+
+// ─── models ─────────────────────────────────────────────────────
+
+model Organization {
+  id        String    @id @default(uuid())
+  name      String
+  type      String?
+  users     User[]
+  meetings  Meeting[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model User {
+  id             String          @id @default(uuid())
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  name           String
+  email          String?         @unique
+  phone          String?
+  role           UserRole        @default(RECORDER)
+  passwordHash   String?
+  lineUserId     String?         @unique
+  meetings       Meeting[]       @relation("MeetingCreator")
+  markers        MeetingMarker[]
+  exports        ExportFile[]
+  auditLogs      AuditLog[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([organizationId])
+}
+
+model Meeting {
+  id             String        @id @default(uuid())
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  createdById    String
+  createdBy      User          @relation("MeetingCreator", fields: [createdById], references: [id])
+  title          String
+  meetingType    MeetingType   @default(GENERAL)
+  location       String?
+  agendaText     String?
+  status         MeetingStatus @default(DRAFT)
+  failureReason  String?
+  startedAt      DateTime?
+  endedAt        DateTime?
+
+  participants MeetingParticipant[]
+  audioChunks  AudioChunk[]
+  markers      MeetingMarker[]
+  transcripts  TranscriptSegment[]
+  summary      MeetingSummary?
+  actionItems  ActionItem[]
+  exports      ExportFile[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([createdById])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model MeetingParticipant {
+  id               String  @id @default(uuid())
+  meetingId        String
+  meeting          Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  userId           String?
+  name             String
+  roleLabel        String?
+  attendanceStatus String  @default("present")
+
+  @@index([meetingId])
+}
+
+model AudioChunk {
+  id                 String              @id @default(uuid())
+  meetingId          String
+  meeting            Meeting             @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  clientChunkId      String              @unique
+  chunkIndex         Int
+  filePath           String
+  mimeType           String?
+  durationSec        Int?
+  fileSizeBytes      BigInt?
+  checksumSha256     String?
+  uploadStatus       ChunkUploadStatus   @default(UPLOADED)
+  transcribeStatus   JobStatus           @default(PENDING)
+  transcribeProvider String?
+  startedAtSec       Int?
+  endedAtSec         Int?
+  retryCount         Int                 @default(0)
+  lastError          String?
+  transcripts        TranscriptSegment[]
+  createdAt          DateTime            @default(now())
+  uploadedAt         DateTime?
+
+  @@unique([meetingId, chunkIndex])
+  @@index([meetingId])
+  @@index([transcribeStatus])
+}
+
+model MeetingMarker {
+  id           String     @id @default(uuid())
+  meetingId    String
+  meeting      Meeting    @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  markerType   MarkerType
+  timestampSec Int
+  note         String?
+  createdById  String?
+  createdBy    User?      @relation(fields: [createdById], references: [id])
+  createdAt    DateTime   @default(now())
+
+  @@index([meetingId, timestampSec])
+}
+
+model TranscriptSegment {
+  id           String     @id @default(uuid())
+  meetingId    String
+  meeting      Meeting    @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  audioChunkId String
+  audioChunk   AudioChunk @relation(fields: [audioChunkId], references: [id], onDelete: Cascade)
+  startTimeSec Int
+  endTimeSec   Int
+  text         String
+  language     String?
+  confidence   Float?
+  createdAt    DateTime   @default(now())
+
+  @@index([meetingId, startTimeSec])
+  @@index([audioChunkId])
+}
+
+model MeetingSummary {
+  id                   String   @id @default(uuid())
+  meetingId            String   @unique
+  meeting              Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  executiveSummary     String
+  keyPointsJson        Json?
+  decisionsJson        Json?
+  risksJson            Json?
+  pendingQuestionsJson Json?
+  officialMinutesJson  Json?
+  qualityCheckJson     Json?
+  qualityScore         Float?
+  modelName            String?
+  promptVersion        String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}
+
+model ActionItem {
+  id                 String           @id @default(uuid())
+  meetingId          String
+  meeting            Meeting          @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  title              String
+  description        String?
+  assigneeName       String?
+  assigneeUserId     String?
+  dueDate            DateTime?
+  status             ActionStatus     @default(PENDING)
+  source             ActionItemSource @default(AI)
+  evidenceRequired   String?
+  sourceTimestampSec Int?
+  confidence         Float?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([meetingId])
+  @@index([status])
+  @@index([source])
+  @@index([assigneeUserId])
+}
+
+model ExportFile {
+  id          String     @id @default(uuid())
+  meetingId   String
+  meeting     Meeting    @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  exportType  ExportType
+  filePath    String
+  createdById String?
+  createdBy   User?      @relation(fields: [createdById], references: [id])
+  createdAt   DateTime   @default(now())
+
+  @@index([meetingId])
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  actorUserId  String?
+  actor        User?    @relation(fields: [actorUserId], references: [id])
+  action       String
+  resourceType String
+  resourceId   String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([actorUserId])
+  @@index([resourceType, resourceId])
+}

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <application>
+    <service
+      android:name="expo.modules.msecrecorder.RecordingService"
+      android:enabled="true"
+      android:exported="false"
+      android:foregroundServiceType="microphone" />
+  </application>
+
+</manifest>

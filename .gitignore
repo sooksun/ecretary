@@ -1,0 +1,49 @@
+# deps
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/cache/
+.yarn/install-state.gz
+
+# build
+dist/
+build/
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+.env.production
+
+# logs
+*.log
+logs/
+npm-debug.log*
+
+# editors
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# prisma generated
+apps/api/prisma/migrations/dev.db*
+
+# expo / react-native
+apps/mobile/.expo/
+apps/mobile/web-build/
+apps/mobile/dist/
+apps/mobile/ios/build/
+apps/mobile/android/build/
+apps/mobile/android/app/build/
+apps/mobile/android/.gradle/
+
+# minio / docker volumes
+infra/data/
+
+# uploads (dev)
+apps/api/uploads/
