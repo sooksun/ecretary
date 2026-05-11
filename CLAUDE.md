@@ -154,4 +154,5 @@ Both files have `REPLACE_WITH_*` placeholders; running with the placeholder valu
   - [docs/04_API_SPEC.md](docs/04_API_SPEC.md) — REST API contract
   - [docs/06_AI_WORKFLOW.md](docs/06_AI_WORKFLOW.md) — pipeline + JSON summary schema
   - [docs/10_RUNBOOK.md](docs/10_RUNBOOK.md) — full local-dev runbook
+  - [docs/RUNBOOK_SECRETS.md](docs/RUNBOOK_SECRETS.md) — rotation steps + blast radius for every secret in `.env.production`
 - Thai language is first-class in transcripts, prompts, and UI strings — don't normalize/strip it.
