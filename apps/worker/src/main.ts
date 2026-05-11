@@ -12,6 +12,7 @@ import { handleTranscribeJob, TranscribeJobData } from './jobs/transcribe';
 import { handleSummarizeJob, SummarizeJobData } from './jobs/summarize';
 import { prisma } from './prisma';
 import { redactSecrets } from './redactSecrets';
+import { alertMeetingFailed } from './alertWebhook';
 
 async function bootstrap(): Promise<void> {
   // Refuse to start if config selects a real provider but it's unreachable
@@ -131,6 +132,9 @@ async function markMeetingFailed(
       return;
     }
     logger.warn({ meetingId, queue, reason }, 'meeting.markedFailed');
+    // Fire-and-forget — alert delivery must not block (or fail) the
+    // primary failure-handling path. See alertWebhook.ts.
+    void alertMeetingFailed({ meetingId, queue, reason });
   } catch (err) {
     logger.error(
       { meetingId, err: (err as Error).message },
