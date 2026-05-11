@@ -113,6 +113,26 @@ No unit tests are configured for `@msec/api`, `@msec/worker`, or `@msec/shared` 
 
 **Compose profiles.** `docker compose up -d redis minio` brings up only the dev infrastructure. Postgres lives in profile `db` (most dev machines have host Postgres on 5432 already — Laragon, Postgres installer, etc.); add `--profile db` if you don't. Whisper lives in profile `ai` (`docker compose --profile ai up -d whisper`). API + worker images live in profile `app` for production-style runs.
 
+**Production DB bootstrap (one-shot).** The dev DB is `msecretary` owned by `postgres`. Production runs against a separate physical DB so dev test data never co-mingles with real meetings. To create from scratch (run as a Postgres superuser):
+
+```sql
+CREATE DATABASE msecretary_prod;
+CREATE USER msec_app WITH LOGIN PASSWORD '<from .env.production>';
+ALTER DATABASE msecretary_prod OWNER TO msec_app;
+\c msecretary_prod
+GRANT ALL ON SCHEMA public TO msec_app;
+ALTER SCHEMA public OWNER TO msec_app;
+```
+
+Then apply migrations from the host (override DATABASE_URL since `apps/api/.env` points at dev):
+
+```bash
+DATABASE_URL="postgresql://msec_app:<pass>@localhost:5432/msecretary_prod?schema=public" \
+  npm --workspace @msec/api run prisma:deploy
+```
+
+For managed Postgres (RDS/Supabase/Neon) the SQL block above is run as the cluster's master user; the `prisma:deploy` step is identical but with the managed host. Re-run `prisma:deploy` (NOT `migrate dev`) for every subsequent migration — never `db push` against prod.
+
 **Production env files (git-ignored).** Two locations to fill in before `docker compose --profile app up -d`:
 - `.env.production` (root) — `AI_PROVIDER=whisper`, `LLM_PROVIDER=claude`, real `ANTHROPIC_API_KEY`. The worker preflight will refuse to boot if mock providers are set with `NODE_ENV=production`.
 - `apps/mobile/.env.production` — `EXPO_PUBLIC_API_BASE_URL` set to the public HTTPS URL of the production API. Picked up by Expo at release-build time (`eas build --profile=production`). Localhost / LAN IPs will not work on installed APKs.
