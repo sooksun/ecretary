@@ -1,5 +1,5 @@
 import React from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { RootStackParamList } from '@/navigation/RootNavigator';
@@ -56,6 +56,28 @@ export default function MeetingBoardScreen() {
     },
     onError: (err: Error) => {
       Alert.alert('ประมวลผลใหม่ไม่สำเร็จ', err.message);
+    },
+  });
+
+  // Export mutation — server renders the file synchronously and returns a
+  // signed S3 URL. We hand the URL to the device's default browser/PDF
+  // viewer via Linking; the user gets the standard download flow.
+  const exportFile = useMutation({
+    mutationFn: async (exportType: 'DOCX' | 'PDF' | 'TRANSCRIPT_TXT') => {
+      const m = await meetingRepo.getById(meetingId);
+      if (!m?.serverId) throw new Error('ยังไม่มี serverId — ประชุมยังไม่อัปโหลด');
+      return meetingsApi.createExport(m.serverId, exportType);
+    },
+    onSuccess: async (result) => {
+      const ok = await Linking.canOpenURL(result.downloadUrl);
+      if (!ok) {
+        Alert.alert('เปิดไฟล์ไม่ได้', 'อุปกรณ์ไม่มีแอปสำหรับเปิดไฟล์นี้');
+        return;
+      }
+      await Linking.openURL(result.downloadUrl);
+    },
+    onError: (err: Error) => {
+      Alert.alert('สร้างไฟล์ไม่สำเร็จ', err.message);
     },
   });
 
@@ -172,9 +194,63 @@ export default function MeetingBoardScreen() {
               </Text>
             ))}
           </Section>
+
+          <Section title="ดาวน์โหลด / ส่งออก">
+            <View style={styles.exportRow}>
+              <ExportButton
+                label="DOCX"
+                hint="รายงานการประชุม (Word)"
+                disabled={exportFile.isPending}
+                pending={exportFile.isPending && exportFile.variables === 'DOCX'}
+                onPress={() => exportFile.mutate('DOCX')}
+              />
+              <ExportButton
+                label="PDF"
+                hint="รายงานการประชุม (PDF)"
+                disabled={exportFile.isPending}
+                pending={exportFile.isPending && exportFile.variables === 'PDF'}
+                onPress={() => exportFile.mutate('PDF')}
+              />
+              <ExportButton
+                label="TXT"
+                hint="ถอดเสียงพร้อมเวลา"
+                disabled={exportFile.isPending}
+                pending={exportFile.isPending && exportFile.variables === 'TRANSCRIPT_TXT'}
+                onPress={() => exportFile.mutate('TRANSCRIPT_TXT')}
+              />
+            </View>
+            <Text style={styles.muted}>
+              ลิงก์ดาวน์โหลดมีอายุ 1 ชั่วโมง — เปิดไฟล์ในเบราว์เซอร์ของอุปกรณ์
+            </Text>
+          </Section>
         </>
       )}
     </ScrollView>
+  );
+}
+
+function ExportButton({
+  label,
+  hint,
+  disabled,
+  pending,
+  onPress,
+}: {
+  label: string;
+  hint: string;
+  disabled: boolean;
+  pending: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      style={[styles.exportBtn, disabled && styles.exportBtnDisabled]}
+      disabled={disabled}
+      onPress={onPress}
+    >
+      <Text style={styles.exportBtnLabel}>{pending ? '...' : label}</Text>
+      <Text style={styles.exportBtnHint}>{hint}</Text>
+    </Pressable>
   );
 }
 
@@ -243,4 +319,22 @@ const styles = StyleSheet.create({
   },
   mockTitle: { color: '#fef3c7', fontWeight: '700', marginBottom: 4 },
   mockBody: { color: '#fde68a', lineHeight: 20 },
+  exportRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  exportBtn: {
+    flex: 1,
+    backgroundColor: '#1e293b',
+    borderColor: '#334155',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+  },
+  exportBtnDisabled: { opacity: 0.5 },
+  exportBtnLabel: { color: '#22c55e', fontWeight: '700', fontSize: 16 },
+  exportBtnHint: { color: '#94a3b8', fontSize: 11, marginTop: 2, textAlign: 'center' },
 });

@@ -57,4 +57,23 @@ export const meetingsApi = {
     const { data } = await api.post(`/meetings/${id}/process`);
     return data;
   },
+
+  /**
+   * Generate a downloadable export of the meeting (DOCX / PDF / TRANSCRIPT_TXT).
+   * The API renders the file synchronously and returns a signed S3 URL valid
+   * for ~1 hour.
+   */
+  async createExport(
+    id: string,
+    exportType: 'DOCX' | 'PDF' | 'TRANSCRIPT_TXT',
+  ): Promise<{
+    id: string;
+    exportType: string;
+    filePath: string;
+    downloadUrl: string;
+    createdAt: string;
+  }> {
+    const { data } = await api.post(`/meetings/${id}/exports`, { exportType });
+    return data;
+  },
 };
