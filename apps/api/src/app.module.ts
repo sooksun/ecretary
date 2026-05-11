@@ -18,6 +18,7 @@ import { ExportsModule } from './modules/exports/exports.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/jwt-auth.guard';
+import { MetricsModule } from './modules/metrics/metrics.module';
 import { QueueName } from '@msec/shared';
 
 @Module({
@@ -50,6 +51,7 @@ import { QueueName } from '@msec/shared';
     ActionItemsModule,
     ExportsModule,
     NotificationsModule,
+    MetricsModule,
   ],
   providers: [
     {
