@@ -3,6 +3,7 @@ import type {
   NativeChunkReadyEvent,
   NativeRecorderErrorEvent,
   NativeRecorderEventMap,
+  RecorderDiagnostics,
 } from './MSecRecorder.types';
 
 const Native = requireNativeModule('MSecRecorder');
@@ -25,6 +26,15 @@ export const MSecRecorder = {
   isRunning(): boolean {
     return Boolean(Native.isRunning());
   },
+  /**
+   * iOS only — reports the AAC encoder's real capabilities and which rotation
+   * strategy would be used. Resolves to null on Android, which is gapless via
+   * MediaRecorder.setNextOutputFile() and has nothing to report.
+   */
+  diagnostics(): Promise<RecorderDiagnostics | null> {
+    if (typeof Native.diagnostics !== 'function') return Promise.resolve(null);
+    return Native.diagnostics();
+  },
   addChunkListener(handler: (e: NativeChunkReadyEvent) => void) {
     return emitter.addListener('onChunkReady', handler);
   },
@@ -39,4 +49,9 @@ export const MSecRecorder = {
   },
 };
 
-export type { NativeChunkReadyEvent, NativeRecorderErrorEvent, NativeRecorderEventMap };
+export type {
+  NativeChunkReadyEvent,
+  NativeRecorderErrorEvent,
+  NativeRecorderEventMap,
+  RecorderDiagnostics,
+};

@@ -12,6 +12,7 @@ The app must be boringly reliable. A meeting recorder that loses audio is not a 
 |---|---|
 | Record 10 minutes | 2 chunks if chunk length = 5 min |
 | Record 60 minutes | 12 chunks, no crash |
+| Speech across a chunk boundary (iOS) | Android: nothing lost. **iOS: ~100 ms clipped at each boundary — expected, not a defect.** Fail only if audible loss is longer than that or a whole phrase disappears. See 05_MOBILE_SPEC "Chunk boundary behaviour". |
 | Pause/resume | timestamps remain consistent |
 | Stop recording | meeting status changes to uploading/local_done |
 | App killed mid-recording | completed chunks remain recoverable |

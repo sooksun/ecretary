@@ -21,6 +21,7 @@
     },
     "android": {
       "package": "com.msecretary.app",
+      "usesCleartextTraffic": true,
       "permissions": [
         "RECORD_AUDIO",
         "WRITE_EXTERNAL_STORAGE",

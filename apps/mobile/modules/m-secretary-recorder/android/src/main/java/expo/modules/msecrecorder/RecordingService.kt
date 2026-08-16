@@ -17,6 +17,8 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.io.File
+import java.io.FileInputStream
+import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -101,13 +103,13 @@ class RecordingService : Service() {
     val finishedFile = currentFile
     val startedAt = currentChunkStartedAtSec
     val endedAt = elapsedSec()
+    val rec = recorder
     try {
-      recorder?.apply {
-        stop()
-        release()
-      }
+      rec?.stop()
     } catch (e: Exception) {
       Log.w(TAG, "recorder.stop threw (likely empty chunk)", e)
+    } finally {
+      try { rec?.release() } catch (_: Exception) {}
     }
     recorder = null
     if (finishedFile != null && finishedFile.exists() && finishedFile.length() > 0) {
@@ -146,10 +148,15 @@ class RecordingService : Service() {
   }
 
   /**
-   * Rotate to a new chunk file using setNextOutputFile — the underlying
-   * encoder keeps writing without gap. After the swap fires
-   * MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED we finalize the previous
-   * file, emit a chunk-ready event, and queue the next rotation.
+   * Rotate to a new chunk file.
+   *
+   * API 26+ (O): uses setNextOutputFile() for gapless encoding — the encoder
+   * never pauses. The MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED callback
+   * finalizes the previous file and schedules the next rotation.
+   *
+   * API 23–25: stop + restart fallback — a brief gap (~100 ms) exists at each
+   * chunk boundary, but recording is not lost. Audio fidelity loss is minimal
+   * for long meetings where chunk duration >> boundary gap.
    */
   private fun scheduleRoll() {
     rollRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -159,10 +166,16 @@ class RecordingService : Service() {
         val nextIdx = chunkIndex.get() + 1
         val nextFile = newChunkFile(nextIdx)
         val rec = recorder ?: return@Runnable
-        rec.setNextOutputFile(nextFile)
-        // The OnInfoListener will switch currentFile when the rollover
-        // actually starts; nextFile is staged.
-        pendingNextFile = nextFile
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          // Gapless: stage the next file; the info callback fires when the swap
+          // actually happens and schedules the following rotation via onNextFileStarted().
+          rec.setNextOutputFile(nextFile)
+          pendingNextFile = nextFile
+        } else {
+          // Legacy: stop → emit finished chunk → start new recorder.
+          legacyRollChunk(nextIdx, nextFile)
+        }
       } catch (e: Exception) {
         Log.e(TAG, "scheduleRoll prepare failed", e)
         listener?.invoke(EVENT_ERROR, mapOf("message" to (e.message ?: "rotate failed")))
@@ -170,6 +183,40 @@ class RecordingService : Service() {
     }
     rollRunnable = r
     mainHandler.postDelayed(r, chunkLengthSec * 1000L)
+  }
+
+  /** Stop+restart chunk rotation for devices running API < 26. */
+  private fun legacyRollChunk(nextIdx: Int, nextFile: File) {
+    val finished = currentFile
+    val startedAt = currentChunkStartedAtSec
+    val endedAt = elapsedSec()
+    val idx = chunkIndex.getAndIncrement()
+
+    val rec = recorder
+    try {
+      rec?.stop()
+    } catch (e: Exception) {
+      Log.w(TAG, "legacyRoll: stop threw (likely empty chunk)", e)
+    } finally {
+      try { rec?.release() } catch (_: Exception) {}
+    }
+    recorder = null
+
+    if (finished != null && finished.exists() && finished.length() > 0) {
+      emitChunkReady(finished, startedAt, endedAt, idx)
+    }
+
+    currentFile = nextFile
+    currentChunkStartedAtSec = endedAt
+    try {
+      val newRec = createRecorder(nextFile)
+      newRec.start()
+      recorder = newRec
+      scheduleRoll()
+    } catch (e: Exception) {
+      Log.e(TAG, "legacyRoll: failed to start new recorder", e)
+      listener?.invoke(EVENT_ERROR, mapOf("message" to (e.message ?: "legacyRoll start failed")))
+    }
   }
 
   private fun createRecorder(out: File): MediaRecorder {
@@ -216,7 +263,26 @@ class RecordingService : Service() {
     scheduleRoll()
   }
 
+  private fun calculateSha256(file: File): String? {
+    return try {
+      val digest = MessageDigest.getInstance("SHA-256")
+      val buffer = ByteArray(8192)
+      val fis = FileInputStream(file)
+      var bytesRead = fis.read(buffer)
+      while (bytesRead != -1) {
+        digest.update(buffer, 0, bytesRead)
+        bytesRead = fis.read(buffer)
+      }
+      fis.close()
+      digest.digest().joinToString("") { "%02x".format(it) }
+    } catch (e: Exception) {
+      Log.e(TAG, "calculateSha256 failed", e)
+      null
+    }
+  }
+
   private fun emitChunkReady(file: File, startedAtSec: Long, endedAtSec: Long, idx: Int) {
+    val checksum = calculateSha256(file)
     listener?.invoke(
       EVENT_CHUNK_READY,
       mapOf(
@@ -226,6 +292,7 @@ class RecordingService : Service() {
         "endedAtSec" to endedAtSec.toInt(),
         "durationSec" to (endedAtSec - startedAtSec).toInt(),
         "fileSizeBytes" to file.length(),
+        "checksumSha256" to checksum
       ),
     )
   }
