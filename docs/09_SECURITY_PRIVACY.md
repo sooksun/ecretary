@@ -34,8 +34,30 @@ Roles:
 - JWT auth
 - signed upload/download URLs where possible
 - object storage private by default
-- audit logs for export/download/delete
+- audit logs for export/download/delete — implemented, see below
 - encrypt secrets using environment variables
+
+## Audit Trail
+
+Written to the `AuditLog` table by `AuditService` (`apps/api/src/common/audit/`).
+Covers the operations that move meeting content out of the system or destroy it:
+
+| action | Written when | resourceType / resourceId | metadata |
+|---|---|---|---|
+| `meeting.delete` | after `DELETE /meetings/:id` succeeds | `Meeting` / meeting id | title, organizationId, counts of audio chunks and export files removed |
+| `export.create` | a DOCX/PDF/TXT file is rendered | `ExportFile` / export id | meetingId, exportType, sizeBytes |
+| `export.download` | a signed download URL is issued (`GET /exports/:id`, or `GET /meetings/:id/exports` for the batch) | `ExportFile` or `Meeting` | meetingId, exportType, `via: detail \| list` |
+
+Design rules:
+
+- **Reads are not audited.** Viewing a summary is the normal use of the product; a row per view would bury the events that matter.
+- **`meeting.delete` is written after the delete succeeds**, never before — a trail listing deletions that did not happen is worse than one that is merely incomplete. It keeps the title because the row it identifies no longer exists.
+- **`AuditService.record()` never throws.** A failed audit write must not turn a successful delete into a 500 for the user; it is logged at error level instead (`audit.write.failed`).
+- **metadata carries no content and no credentials** — no transcript text, no signed URLs.
+- The trail is currently write-only; there is no read API for it yet. Query it directly:
+  `SELECT action, "resourceType", "resourceId", "actorUserId", metadata, "createdAt" FROM "AuditLog" ORDER BY "createdAt" DESC;`
+
+Covered by the API e2e suite (`apps/api/test/app.e2e-spec.ts`), including the negative case that a failed delete writes nothing.
 
 ## Retention Policy
 

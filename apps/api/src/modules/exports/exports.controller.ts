@@ -21,16 +21,16 @@ export class ExportsController {
     @Body(new ZodValidationPipe(CreateExportSchema)) body: z.infer<typeof CreateExportSchema>,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.exports.create(id, body.exportType, user.organizationId, body.template);
+    return this.exports.create(id, body.exportType, user.organizationId, body.template, user.id);
   }
 
   @Get('meetings/:id/exports')
   async list(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.exports.list(id, user.organizationId);
+    return this.exports.list(id, user.organizationId, user.id);
   }
 
   @Get('exports/:id')
   async detail(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.exports.getById(id, user.organizationId);
+    return this.exports.getById(id, user.organizationId, user.id);
   }
 }

@@ -10,6 +10,7 @@ import { ExportType, SummaryOutput, SummaryOutputSchema } from '@msec/shared';
 import { ExportType as PrismaExportType } from '@prisma/client';
 import { renderMinutesDocx } from './render/docx-renderer';
 import { renderMinutesPdf } from './render/pdf-renderer';
+import { AuditService, AuditAction, AuditResource } from '../../common/audit/audit.service';
 
 @Injectable()
 export class ExportsService {
@@ -18,9 +19,16 @@ export class ExportsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly audit: AuditService,
   ) {}
 
-  async create(meetingId: string, exportType: ExportType, orgId: string, _template?: string) {
+  async create(
+    meetingId: string,
+    exportType: ExportType,
+    orgId: string,
+    _template?: string,
+    actorUserId: string | null = null,
+  ) {
     const meeting = await this.prisma.meeting.findFirst({
       where: { id: meetingId, organizationId: orgId },
       include: {
@@ -31,7 +39,9 @@ export class ExportsService {
     if (!meeting) throw new NotFoundException('Meeting not found');
 
     if (exportType === ExportType.TRANSCRIPT_TXT) {
-      return this.exportTranscriptTxt(meeting.id);
+      // Separate render path (no summary needed) — audit it here so the branch
+      // cannot leave the trail with a hole in it.
+      return this.exportTranscriptTxt(meeting.id, actorUserId);
     }
 
     if (!meeting.summary) {
@@ -94,22 +104,56 @@ export class ExportsService {
       },
     });
 
+    // Meeting content just left the system as a file. Recorded before the
+    // signed URL is minted so the render is logged even if URL signing fails.
+    await this.audit.record({
+      actorUserId,
+      action: AuditAction.EXPORT_CREATE,
+      resourceType: AuditResource.EXPORT_FILE,
+      resourceId: record.id,
+      metadata: { meetingId, exportType, sizeBytes: buffer.length },
+    });
+
     return this.withDownloadUrl(record);
   }
 
-  async list(meetingId: string, orgId: string) {
+  async list(meetingId: string, orgId: string, actorUserId: string | null = null) {
     await this.assertMeetingInOrg(meetingId, orgId);
     const rows = await this.prisma.exportFile.findMany({
       where: { meetingId },
       orderBy: { createdAt: 'desc' },
     });
+
+    // Listing hands out a signed URL for every export at once, so it is a
+    // download event too. One row for the batch rather than one per file —
+    // the point is that this actor could fetch these files, and N rows per
+    // screen open would bury the individual downloads below.
+    if (rows.length > 0) {
+      await this.audit.record({
+        actorUserId,
+        action: AuditAction.EXPORT_DOWNLOAD,
+        resourceType: AuditResource.MEETING,
+        resourceId: meetingId,
+        metadata: { via: 'list', exportIds: rows.map((r) => r.id) },
+      });
+    }
+
     return Promise.all(rows.map((r) => this.withDownloadUrl(r)));
   }
 
-  async getById(id: string, orgId: string) {
+  async getById(id: string, orgId: string, actorUserId: string | null = null) {
     const f = await this.prisma.exportFile.findUnique({ where: { id } });
     if (!f) throw new NotFoundException('Export not found');
     await this.assertMeetingInOrg(f.meetingId, orgId);
+
+    await this.audit.record({
+      actorUserId,
+      action: AuditAction.EXPORT_DOWNLOAD,
+      resourceType: AuditResource.EXPORT_FILE,
+      resourceId: f.id,
+      metadata: { meetingId: f.meetingId, exportType: f.exportType, via: 'detail' },
+    });
+
     return this.withDownloadUrl(f);
   }
 
@@ -123,7 +167,7 @@ export class ExportsService {
     if (!meeting) throw new NotFoundException('Meeting not found');
   }
 
-  private async exportTranscriptTxt(meetingId: string) {
+  private async exportTranscriptTxt(meetingId: string, actorUserId: string | null = null) {
     const segments = await this.prisma.transcriptSegment.findMany({
       where: { meetingId },
       orderBy: { startTimeSec: 'asc' },
@@ -146,6 +190,20 @@ export class ExportsService {
         filePath: key,
       },
     });
+
+    await this.audit.record({
+      actorUserId,
+      action: AuditAction.EXPORT_CREATE,
+      resourceType: AuditResource.EXPORT_FILE,
+      resourceId: record.id,
+      metadata: {
+        meetingId,
+        exportType: ExportType.TRANSCRIPT_TXT,
+        sizeBytes: buffer.length,
+        segments: segments.length,
+      },
+    });
+
     return this.withDownloadUrl(record);
   }
 

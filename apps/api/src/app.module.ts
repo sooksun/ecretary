@@ -18,7 +18,10 @@ import { ExportsModule } from './modules/exports/exports.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/jwt-auth.guard';
+import { RolesGuard } from './modules/auth/roles.guard';
 import { MetricsModule } from './modules/metrics/metrics.module';
+import { ApiCacheModule } from './common/cache/cache.module';
+import { AuditModule } from './common/audit/audit.module';
 import { QueueName } from '@msec/shared';
 
 @Module({
@@ -37,7 +40,10 @@ import { QueueName } from '@msec/shared';
     BullModule.registerQueue(
       { name: QueueName.TRANSCRIBE },
       { name: QueueName.SUMMARIZE },
+      { name: QueueName.SWEEP },
     ),
+    ApiCacheModule,
+    AuditModule,
     PrismaModule,
     StorageModule,
     AuthModule,
@@ -61,6 +67,10 @@ import { QueueName } from '@msec/shared';
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: RolesGuard,
     },
   ],
 })
