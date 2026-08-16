@@ -1,4 +1,5 @@
 export * from './enums';
+export * from './job-id';
 export * from './types/meeting';
 export * from './types/audio-chunk';
 export * from './types/marker';
