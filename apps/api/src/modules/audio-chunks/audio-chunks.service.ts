@@ -14,6 +14,7 @@ import {
   QueueName,
   ChunkUploadStatus as SharedChunkStatus,
   UploadChunkMetaDto,
+  jobId,
 } from '@msec/shared';
 import {
   ChunkUploadStatus,
@@ -70,6 +71,18 @@ export class AudioChunksService {
       throw new BadRequestException('Empty file');
     }
 
+    // Accept known audio MIME types; reject clearly-wrong content types.
+    // application/octet-stream is allowed as a fallback — some Android versions
+    // report it for audio/mp4 files.
+    const effectiveMime = (file.mimetype ?? meta.mimeType ?? '').toLowerCase();
+    const AUDIO_PREFIX_OK = effectiveMime.startsWith('audio/');
+    const OCTET_STREAM_OK = effectiveMime === 'application/octet-stream' || effectiveMime === '';
+    if (!AUDIO_PREFIX_OK && !OCTET_STREAM_OK) {
+      throw new BadRequestException(
+        `Unsupported content type "${effectiveMime}". Expected an audio/* format.`,
+      );
+    }
+
     // Verify checksum if client provided one
     if (meta.checksumSha256) {
       const computed = createHash('sha256').update(file.buffer).digest('hex');
@@ -105,11 +118,14 @@ export class AudioChunksService {
       },
     });
 
-    // Enqueue transcription job (worker runs separately)
+    // Enqueue transcription job (worker runs separately).
+    // jobId is deterministic so that a re-upload of the same chunk after
+    // network failure doesn't queue a second job.
     await this.transcribeQueue.add(
       'transcribe-chunk',
       { chunkId: created.id, meetingId, key },
       {
+        jobId: jobId.transcribe(created.id),
         attempts: 5,
         backoff: { type: 'exponential', delay: 5_000 },
         removeOnComplete: 100,
@@ -178,7 +194,13 @@ export class AudioChunksService {
   private guessExtension(mime?: string, originalName?: string): string {
     if (originalName) {
       const idx = originalName.lastIndexOf('.');
-      if (idx > -1 && idx < originalName.length - 1) return originalName.slice(idx + 1).toLowerCase();
+      if (idx > -1 && idx < originalName.length - 1) {
+        const ext = originalName.slice(idx + 1).toLowerCase();
+        // The filename is client-supplied and this value becomes the tail of a
+        // storage key, so anything with a separator or dot is dropped rather
+        // than trusted — fall through to the mime-type mapping below.
+        if (/^[a-z0-9]{1,8}$/.test(ext)) return ext;
+      }
     }
     if (!mime) return 'm4a';
     if (mime.includes('mp4')) return 'm4a';
