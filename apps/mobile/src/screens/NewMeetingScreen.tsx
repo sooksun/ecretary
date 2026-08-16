@@ -28,11 +28,7 @@ export default function NewMeetingScreen() {
   const [agenda, setAgenda] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const onCreate = async () => {
-    if (!title.trim()) {
-      Alert.alert('โปรดระบุชื่อประชุม');
-      return;
-    }
+  const doCreate = async () => {
     setBusy(true);
     try {
       const local = await meetingRepo.create({
@@ -58,6 +54,21 @@ export default function NewMeetingScreen() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const onCreate = () => {
+    if (!title.trim()) {
+      Alert.alert('โปรดระบุชื่อประชุม');
+      return;
+    }
+    Alert.alert(
+      'ยืนยันการบันทึกเสียง',
+      'แอปจะบันทึกเสียงในห้องประชุม\nผู้เข้าร่วมทุกคนต้องรับทราบและยินยอมก่อน\n\nคุณแจ้งผู้เข้าร่วมทุกคนแล้วใช่หรือไม่?',
+      [
+        { text: 'ยกเลิก', style: 'cancel' },
+        { text: 'ยืนยัน — เริ่มบันทึก', onPress: () => void doCreate() },
+      ],
+    );
   };
 
   return (

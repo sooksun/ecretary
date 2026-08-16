@@ -1,11 +1,15 @@
 import axios, { AxiosInstance } from 'axios';
-import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 import { useAuthStore } from '@/store/auth';
 
+// EXPO_PUBLIC_* vars are baked in at bundle time (see .env / .env.production).
+// Fallback: emulator/simulator loopback to the host machine — Android emulator
+// reaches the host at 10.0.2.2, iOS simulator shares the host's localhost.
 const baseURL =
-  (Constants.expoConfig?.extra as { apiBaseUrl?: string })?.apiBaseUrl ??
   process.env.EXPO_PUBLIC_API_BASE_URL ??
-  'http://10.0.2.2:3000/api/v1'; // Android emulator → host
+  (Platform.OS === 'android'
+    ? 'http://10.0.2.2:3000/api/v1'
+    : 'http://localhost:3000/api/v1');
 
 export const api: AxiosInstance = axios.create({
   baseURL,

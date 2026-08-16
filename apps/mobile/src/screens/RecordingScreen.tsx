@@ -87,11 +87,13 @@ export default function RecordingScreen() {
     await recorder.stop();
     await meetingRepo.setStatus(meetingId, MeetingStatus.UPLOADING);
     await meetingRepo.setEndedAt(meetingId, new Date().toISOString());
+    const chunks = await chunkRepo.listByMeeting(meetingId);
+    const totalChunks = chunks.length;
     const meeting = await meetingRepo.getById(meetingId);
     if (meeting?.serverId) {
       await meetingRepo.setPendingSync(meetingId, 'end');
       try {
-        await meetingsApi.end(meeting.serverId);
+        await meetingsApi.end(meeting.serverId, totalChunks);
         await meetingRepo.setPendingSync(meetingId, null);
       } catch {
         // UploadQueueService.tick() will retry every 4s

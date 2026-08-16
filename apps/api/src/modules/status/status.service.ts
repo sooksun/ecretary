@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../prisma/prisma.service';
-import { JobStatus, MeetingStatus, QueueName } from '@msec/shared';
+import { MeetingStatus, QueueName, jobId } from '@msec/shared';
 import { JobStatus as PrismaJobStatus } from '@prisma/client';
 
 @Injectable()
@@ -81,7 +81,13 @@ export class StatusService {
       await this.transcribeQueue.add(
         'transcribe-chunk',
         { chunkId: ch.id, meetingId, key: ch.filePath },
-        { attempts: 5, backoff: { type: 'exponential', delay: 5_000 }, removeOnComplete: 100, removeOnFail: 100 },
+        {
+          jobId: jobId.transcribe(ch.id),
+          attempts: 5,
+          backoff: { type: 'exponential', delay: 5_000 },
+          removeOnComplete: 100,
+          removeOnFail: 100,
+        },
       );
     }
 
@@ -89,24 +95,16 @@ export class StatusService {
     await this.summarizeQueue.add(
       'summarize-meeting',
       { meetingId },
-      { attempts: 3, backoff: { type: 'exponential', delay: 10_000 }, removeOnComplete: 100, removeOnFail: 100 },
+      {
+        jobId: jobId.summarize(meetingId),
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 10_000 },
+        removeOnComplete: 100,
+        removeOnFail: 100,
+      },
     );
 
     return { reQueued: chunks.length };
   }
 
-  /**
-   * Internal helper used by the worker to flip statuses
-   * via a small admin endpoint (kept inside this service to centralize).
-   */
-  async setChunkTranscribeStatus(chunkId: string, status: JobStatus, error?: string) {
-    return this.prisma.audioChunk.update({
-      where: { id: chunkId },
-      data: {
-        transcribeStatus: status as PrismaJobStatus,
-        lastError: error ?? null,
-        retryCount: status === JobStatus.FAILED ? { increment: 1 } : undefined,
-      },
-    });
-  }
 }

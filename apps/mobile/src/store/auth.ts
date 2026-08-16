@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { AuthStorage, StoredUser } from '@/services/AuthStorage';
+import { uploadQueue } from '@/services/UploadQueueService';
 
 type AuthState = {
   token: string | null;
@@ -24,6 +25,9 @@ export const useAuthStore = create<AuthState>((set) => ({
     else set({ hydrated: true });
   },
   async logout() {
+    // Stop the upload poller immediately so in-flight ticks don't fire
+    // after auth is cleared and start burning retry counts with 401s.
+    uploadQueue.stop();
     await AuthStorage.clear();
     set({ token: null, user: null });
   },

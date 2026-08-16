@@ -21,8 +21,13 @@ export const meetingsApi = {
     return data;
   },
 
-  async list(): Promise<ServerMeeting[]> {
-    const { data } = await api.get('/meetings');
+  async list(params?: {
+    status?: string;
+    q?: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<{ items: ServerMeeting[]; nextCursor: string | null }> {
+    const { data } = await api.get('/meetings', { params });
     return data;
   },
 
@@ -30,8 +35,8 @@ export const meetingsApi = {
     await api.post(`/meetings/${id}/start`);
   },
 
-  async end(id: string): Promise<void> {
-    await api.post(`/meetings/${id}/end`);
+  async end(id: string, totalChunks?: number): Promise<void> {
+    await api.post(`/meetings/${id}/end`, { totalChunks });
   },
 
   async getStatus(id: string): Promise<{

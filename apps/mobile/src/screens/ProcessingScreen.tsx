@@ -57,7 +57,7 @@ export default function ProcessingScreen() {
         <Row label="ส่งสำเร็จ" value={String(local.UPLOADED ?? 0)} />
         <Row label="พยายามใหม่" value={String(local.FAILED_RETRY ?? 0)} />
         <Row label="ล้มเหลว" value={String(local.FAILED_FINAL ?? 0)} />
-        <Pressable style={styles.retry} onPress={() => uploadQueue.tick()}>
+        <Pressable style={styles.retry} onPress={() => uploadQueue.forceRetry(meetingId)}>
           <Text style={styles.retryText}>ลองอัปโหลดอีกครั้ง</Text>
         </Pressable>
       </Card>

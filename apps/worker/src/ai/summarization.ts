@@ -3,9 +3,9 @@ import { SummaryOutput, SummaryOutputSchema, MOCK_MODEL_NAME, PROMPT_VERSION } f
 /**
  * Summary provider interface.
  *
- * Phase A: deterministic mock that always returns a valid SummaryOutput.
- * Phase 4: real LLM impl will produce JSON, validate via Zod, and fall
- * back here on parse failure.
+ * Mock: deterministic Thai output for dev/testing — selected via LLM_PROVIDER=mock.
+ * Claude: tool-use call to Anthropic, validated via Zod — selected via LLM_PROVIDER=claude.
+ * Both implementations must throw on any failure; no silent fallback between them.
  */
 export interface SummarizationInput {
   meetingId: string;
@@ -17,6 +17,8 @@ export interface SummarizationInput {
   transcriptText: string;
   /** When set, instructs the provider to use a specific template (e.g. official_school_minutes). */
   template?: string;
+  /** Free-form note prepended to the prompt — used for partial-coverage warnings. */
+  notes?: string;
 }
 
 export interface SummarizationProvider {
