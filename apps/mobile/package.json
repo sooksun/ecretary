@@ -8,8 +8,9 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
+    "postinstall": "patch-package",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint . --ext .ts,.tsx --max-warnings=0"
+    "lint": "eslint ."
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "1.23.1",
@@ -40,9 +41,14 @@
   },
   "devDependencies": {
     "@babel/core": "^7.24.7",
+    "@eslint/js": "^9.39.5",
     "@types/react": "~18.2.79",
     "@types/uuid": "^10.0.0",
     "babel-plugin-module-resolver": "^5.0.3",
-    "typescript": "~5.3.3"
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "patch-package": "^8.0.1",
+    "typescript": "~5.3.3",
+    "typescript-eslint": "^8.67.0"
   }
 }

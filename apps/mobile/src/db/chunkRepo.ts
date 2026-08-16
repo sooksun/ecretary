@@ -152,6 +152,24 @@ export const chunkRepo = {
     }
   },
 
+  async resetFailedForMeeting(meetingId: string): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `UPDATE local_audio_chunks
+         SET upload_status = ?, retry_count = 0
+       WHERE meeting_id = ? AND upload_status = ?`,
+      [ChunkUploadStatus.QUEUED, meetingId, ChunkUploadStatus.FAILED_FINAL],
+    );
+    await db.runAsync(
+      `UPDATE local_upload_queue
+         SET next_attempt_at = NULL, attempt_count = 0, last_error = NULL
+       WHERE chunk_id IN (
+         SELECT id FROM local_audio_chunks WHERE meeting_id = ?
+       )`,
+      [meetingId],
+    );
+  },
+
   async countByStatusForMeeting(meetingId: string): Promise<Record<string, number>> {
     const db = await getDb();
     const rows = (await db.getAllAsync<{ upload_status: string; n: number }>(

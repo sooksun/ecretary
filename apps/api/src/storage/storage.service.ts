@@ -1,16 +1,17 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  DeleteObjectCommand,
   HeadBucketCommand,
   CreateBucketCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Readable } from 'node:stream';
 import { promises as fs } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 
 export interface PutObjectInput {
   key: string;
@@ -82,9 +83,18 @@ export class StorageService {
     }
   }
 
+  private assertLocalKey(key: string): string {
+    const filePath = join(this.localRoot, key);
+    const rootResolved = resolve(this.localRoot) + sep;
+    if (!resolve(filePath).startsWith(rootResolved)) {
+      throw new Error(`Storage key escapes the local root: "${key}"`);
+    }
+    return filePath;
+  }
+
   async putObject(input: PutObjectInput): Promise<{ key: string; url: string }> {
     if (this.driver === 'local') {
-      const filePath = join(this.localRoot, input.key);
+      const filePath = this.assertLocalKey(input.key);
       await fs.mkdir(dirname(filePath), { recursive: true });
       const buf = Buffer.isBuffer(input.body)
         ? input.body
@@ -110,7 +120,7 @@ export class StorageService {
 
   async getSignedDownloadUrl(key: string, expiresInSec = 3600): Promise<string> {
     if (this.driver === 'local') {
-      return `file://${join(this.localRoot, key)}`;
+      return `file://${this.assertLocalKey(key)}`;
     }
     if (!this.s3) throw new Error('S3 client not initialized');
     return getSignedUrl(
@@ -123,14 +133,54 @@ export class StorageService {
   /** Used by worker — download object as a buffer. */
   async getObjectBuffer(key: string): Promise<Buffer> {
     if (this.driver === 'local') {
-      return fs.readFile(join(this.localRoot, key));
+      return fs.readFile(this.assertLocalKey(key));
     }
     if (!this.s3) throw new Error('S3 client not initialized');
     const res = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
     return this.streamToBuffer(res.Body as Readable);
   }
 
+  async deleteObjects(keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    if (this.driver === 'local') {
+      await Promise.allSettled(
+        keys.map(async (key) => {
+          // assertLocalKey throws on path-traversal — propagates as a rejection
+          // to allSettled so the caller can observe it rather than silently skip.
+          const filePath = this.assertLocalKey(key);
+          await fs.unlink(filePath).catch((err: NodeJS.ErrnoException) => {
+            if (err.code !== 'ENOENT') throw err; // only silence "already gone"
+          });
+        }),
+      );
+      return;
+    }
+    if (!this.s3) throw new Error('S3 client not initialized');
+    // Delete in parallel; allSettled so one missing object doesn't abort others.
+    await Promise.allSettled(
+      keys.map((key) =>
+        this.s3!.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key })),
+      ),
+    );
+  }
+
+  /**
+   * `UploadChunkMetaSchema` already restricts clientChunkId to `[A-Za-z0-9_-]`,
+   * but this method builds a storage path from caller-supplied strings, so it
+   * re-checks rather than trusting every future caller to have validated first.
+   * The local-disk backend has its own traversal guard in `putObject`; S3 keys
+   * are opaque, which is exactly why a bad segment would go unnoticed there.
+   */
   buildChunkKey(meetingId: string, clientChunkId: string, ext: string): string {
+    for (const [name, value] of [
+      ['meetingId', meetingId],
+      ['clientChunkId', clientChunkId],
+      ['ext', ext],
+    ] as const) {
+      if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+        throw new BadRequestException(`${name} contains characters not allowed in a storage key`);
+      }
+    }
     return `meetings/${meetingId}/chunks/${clientChunkId}.${ext}`;
   }
 

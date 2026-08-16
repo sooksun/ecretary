@@ -29,7 +29,9 @@
     "compose:down": "docker compose -f infra/docker-compose.yml down",
     "compose:logs": "docker compose -f infra/docker-compose.yml logs -f",
     "infra:up": "docker compose -f infra/docker-compose.yml --profile ai up -d redis minio whisper",
-    "doctor": "ts-node --transpile-only --project scripts/tsconfig.json scripts/doctor.ts"
+    "doctor": "ts-node --transpile-only --project scripts/tsconfig.json scripts/doctor.ts",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
   },
   "engines": {
     "node": ">=20.0.0"

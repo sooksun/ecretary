@@ -124,6 +124,13 @@ services:
       WORKER_CONCURRENCY_SUMMARY: ${WORKER_CONCURRENCY_SUMMARY:-1}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
       ALERT_ENV_LABEL: ${ALERT_ENV_LABEL:-msec}
+      WORKER_HEALTH_PORT: ${WORKER_HEALTH_PORT:-3001}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3001/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

@@ -57,10 +57,16 @@ npm --workspace @msec/api run lint
 cd apps/mobile && npm run lint
 
 # Tests
-npm --workspace @msec/api run test:e2e                      # API e2e (jest, supertest) — only test suite that exists
+npm test                                                    # all workspace suites (currently worker unit tests)
+npm --workspace @msec/worker run test                       # worker unit tests (jest, no DB/Redis/network)
+npm --workspace @msec/api run test:e2e                      # API e2e (jest, supertest) — needs Postgres up
+
+# Lint
+npm run lint                                                # api + worker
+cd apps/mobile && npm run lint                              # mobile is outside the workspace
 ```
 
-No unit tests are configured for `@msec/api`, `@msec/worker`, or `@msec/shared` — only the API e2e suite. Don't reference `npm test` in scripts; it is not wired.
+`@msec/worker` has unit tests under `apps/worker/test/*.spec.ts` — pure functions and provider contracts only (no DB, Redis, or network; providers are exercised through a mocked `fetch`). Anything needing real infrastructure belongs in the API e2e suite instead. `@msec/shared` has no suite of its own; its schemas are covered indirectly through the worker contract tests.
 
 `predev:*` and `preprisma:*` hooks run `sync:env`, which copies the **root** `.env` into `apps/api/.env` and `apps/worker/.env`. Edit the **root** `.env` — per-app copies are overwritten on every dev/prisma run.
 
@@ -74,7 +80,8 @@ No unit tests are configured for `@msec/api`, `@msec/worker`, or `@msec/shared` 
 | `AI_PROVIDER` | `mock` | `mock` \| `whisper` — picks transcription provider in `jobs/transcribe.ts` |
 | `WHISPER_ENDPOINT` | `http://localhost:9001` | Where `WhisperHttpProvider` POSTs audio. Inside compose use `http://whisper:9001` |
 | `WHISPER_LANGUAGE` | `th` | Sent to whisper as form field |
-| `LLM_PROVIDER` | `mock` | `mock` \| `claude` — picks summary provider in `jobs/summarize.ts` |
+| `LLM_PROVIDER` | `mock` | `mock` \| `claude` \| `openrouter` \| `openai` \| `deepseek` \| `ollama` — picks summary provider in `jobs/summarize.ts` |
+| `OPENROUTER_API_KEY` | — | Required when `LLM_PROVIDER=openrouter`; preflight refuses to boot unless it starts with `sk-or-` |
 | `LLM_MODEL` | `claude-sonnet-4-6` | Anthropic model ID for `ClaudeSummarizationProvider` |
 | `ANTHROPIC_API_KEY` | — | Required when `LLM_PROVIDER=claude`; missing key → init throws → factory falls back to mock |
 | `WORKER_CONCURRENCY_TRANSCRIBE` | `2` | BullMQ concurrency for transcribe queue |
@@ -92,6 +99,7 @@ No unit tests are configured for `@msec/api`, `@msec/worker`, or `@msec/shared` 
 | `AI_PROVIDER=whisper` | downloads chunk from S3 → multipart POST to `WHISPER_ENDPOINT` (`http://whisper:9001` in compose) → maps response | `WhisperHttpProvider` |
 | `LLM_PROVIDER=mock` (default) | hand-rolled `SummaryOutput` matching markers | `MockSummarizationProvider` |
 | `LLM_PROVIDER=claude` | Anthropic SDK with **tool use** (`submit_meeting_summary`) for guaranteed JSON shape, prompt caching on system + template, `LLM_MODEL` defaults to `claude-sonnet-4-6` | `ClaudeSummarizationProvider` |
+| `LLM_PROVIDER=openrouter` \| `openai` \| `deepseek` \| `ollama` | OpenAI-compatible `/chat/completions` with `response_format: json_object`, then `repairJsonString` → `SummaryOutputSchema.parse`. Base URL and key are per-tag; OpenRouter uses `https://openrouter.ai/api/v1`, `OPENROUTER_API_KEY`, vendor-prefixed `LLM_MODEL` (`anthropic/claude-sonnet-4.5`) and sends `HTTP-Referer`/`X-Title` for dashboard attribution | `OpenAISummarizationProvider` |
 
 **The summary contract is the JSON shape, not the prompt.** Real providers must `SummaryOutputSchema.parse(json)` and **throw on any failure** (no API key, network error, tool_use missing, Zod validation fail). The job handler lets BullMQ retry, and the worker `failed` event marks the meeting as `FAILED` with `failureReason` after final attempt. **Never silently substitute mock content** — a meeting marked `READY` must reflect the user's actual audio. Mock providers are dev-only and selected explicitly via `LLM_PROVIDER=mock` / `AI_PROVIDER=mock`.
 
@@ -105,9 +113,33 @@ No unit tests are configured for `@msec/api`, `@msec/worker`, or `@msec/shared` 
 
 **Mobile auth.** Token + user are persisted in `expo-secure-store` via `AuthStorage`. `useAuthStore` (zustand) holds the reactive state and is hydrated by `useBootstrap` on app start. The axios client at `apps/mobile/src/api/client.ts` reads the token from the store on every request and **on 401 calls `useAuthStore.getState().logout()`** — which clears storage and routes the navigator back to `LoginScreen`. `UploadQueueService.tick()` short-circuits when there's no token, so logging out doesn't burn retry counts.
 
-**Mobile recording (M5).** The Phase A `expo-av` recorder is replaced by a local Expo Module at `apps/mobile/modules/m-secretary-recorder/`. The Kotlin side runs a `RecordingService` (Foreground Service, type=microphone) that uses `MediaRecorder.setNextOutputFile()` for **gapless** 5-min chunk rotation on Android 8+. The JS-side `AudioRecorderService.ts` is now a thin wrapper that delegates to the native module while preserving the original interface — **screens are unchanged**. Format: AAC/MP4 16 kHz mono 64 kbps. Requires `npx expo prebuild --clean` before the first build (autolinks the local module). iOS path is intentionally not implemented (`Platform.OS !== 'android'` throws). Upload queue still polls every 4s with exponential backoff (max 6 retries); SQLite repos in `src/db` mirror chunk/meeting/marker rows locally.
+**Mobile recording (M5).** The Phase A `expo-av` recorder is replaced by a local Expo Module at `apps/mobile/modules/m-secretary-recorder/`. The Kotlin side runs a `RecordingService` (Foreground Service, type=microphone) that uses `MediaRecorder.setNextOutputFile()` for **gapless** 5-min chunk rotation on Android 8+. iOS (`ios/MSecRecorderModule.swift`) implements the same JS contract with a continuous `AVAudioEngine` tap feeding a rotating `AVAssetWriter`, which is **also gapless** — see the rotation notes below. The JS-side `AudioRecorderService.ts` is a thin wrapper that delegates to the native module while preserving the original interface — **screens are unchanged**. Format on both platforms: AAC/MP4 16 kHz mono 64 kbps. Requires `npx expo prebuild --clean` before the first build (autolinks the local module). Upload queue still polls every 4s with exponential backoff (max 6 retries); SQLite repos in `src/db` mirror chunk/meeting/marker rows locally.
+
+**iOS chunk rotation is gapless (root cause was an illegal bit rate).** Both platforms now lose nothing at a boundary. iOS runs one continuous `AVAudioEngine` input tap into a chain of `AVAssetWriter`s: the next chunk's writer is opened a chunk ahead and swapped in under an `os_unfair_lock` on the audio thread, and a tap buffer straddling a boundary is split so chunk times tile the timeline exactly.
+
+The two earlier rewrites were reverted after blaming the Simulator's encoder and the hand-built `CMSampleBuffer`. **Both diagnoses were wrong.** An isolated matrix (synthetic PCM, no mic, one variable at a time) found a single cause:
+
+> `AVEncoderBitRateKey = 64000` is out of range for AAC-LC mono at a **16 kHz** output rate. The encoder's own `applicableEncodeBitRates` for 16 kHz mono is {12, 16, 20, 24, 28, 32, 40, 48} kbps.
+
+With the bit rate inside that set, all 13 construction variants pass — `sampleSizeEntryCount` 0 *and* 1, interleaved *and* non-interleaved, Int16 *and* Float32, `CMSampleBufferSetDataBufferFromAudioBufferList` *and* a manual `CMBlockBuffer`, `startSession` at `.zero` *and* at the first PTS. `AVAudioRecorder` never surfaced the error because it silently clamps the requested bit rate; `AVAssetWriter` refuses instead.
+
+| Approach | Result |
+|---|---|
+| `AVAudioEngine` tap → `AVAudioFile(forWriting:settings:)` with AAC | Dead end — `AVAudioFile.mm:setBitRate … error 560226676` (`'!dat'`). AVAudioFile cannot write a compressed .m4a at all, only PCM containers. |
+| `AVAudioEngine` tap → `AVAssetWriter`, 64 kbps @ 16 kHz | `AVFoundationErrorDomain -11861` / `FigExport -12651` → 0-byte file. Illegal bit rate, **not** a Simulator or CMSampleBuffer problem. |
+| `AVAudioEngine` tap → `AVAssetWriter`, bit rate clamped to the encoder's max | Works. Rotation verified lossless — decoded frames equal input frames across boundaries. |
+
+Consequence for parity: the documented "64 kbps" was never achievable at 16 kHz — AVAudioRecorder was already clamping it, so this is not a quality regression. `AACEncoderCapabilities` now asks the encoder at runtime and clamps to the highest supported value (48 kbps everywhere measured so far) rather than hard-coding a number a given device might reject.
+
+AAC priming is **not** lost audio: a ramp round-trip (encode N frames, decode back) returns exactly N frames. `AVURLAsset.duration` reads ~132 ms short per chunk because of the priming edit list, but every sample is present, so a boundary costs nothing. Don't "fix" that duration gap.
+
+`MSecRecorder.diagnostics()` reports the encoder's real capabilities, the selected bit rate, and whether continuous capture is supported. `start()` runs a fast encoder probe against the live input format and falls back to the old AVAudioRecorder rotation (`legacy-avaudiorecorder`, ~100 ms per boundary) if it fails, so an unexpected runtime degrades instead of breaking. The active strategy is reported in the `onStarted` payload.
+
+Falling back to PCM chunks would also be gapless but quadruples upload size (9.6 MB vs 2.4 MB per 5-min chunk), which contradicts the "old phones, school network" premise in the PRD. The full findings are repeated in the Swift file's header comment.
 
 **Android networking.** Emulator → host = `http://10.0.2.2:3000/api/v1` (default). Real device → use the laptop LAN IP and open Windows firewall on port 3000.
+
+**Audit trail.** `AuditService` (`common/audit/`, registered globally like Prisma and the cache) writes an `AuditLog` row for the three operations `docs/09_SECURITY_PRIVACY.md` commits to: `meeting.delete`, `export.create`, `export.download`. Reads are deliberately not audited. `record()` never throws — a failed audit write is logged, not surfaced, so it cannot turn a successful delete into a 500. Deletes are recorded **after** the delete succeeds and keep the title, since the row they identify is gone. When adding a new destructive or content-exporting endpoint, add an action to `AuditAction` and record it there — note that `exports.service.ts` has two render paths (`create` and the early-return `exportTranscriptTxt`) and both need it.
 
 **Exports (M6).** `POST /meetings/:id/exports` accepts `{exportType: "DOCX" | "PDF" | "TRANSCRIPT_TXT"}` and returns `{id, filePath, downloadUrl, ...}`. The signed `downloadUrl` is good for 1 hour. DOCX uses `docx`, PDF uses `pdfmake` with bundled Sarabun fonts in `apps/api/assets/fonts/` (TH gov "TH Sarabun New"-equivalent). PDF rendering throws `ServiceUnavailableException` if the font files are missing — DOCX still works because Word/LibreOffice supplies fonts at open time. The official-minutes layout (header, attendees, agenda items, action-items table, signer block, AI quality footnote) lives in `render/{docx,pdf}-renderer.ts` — keep both renderers in sync when adding fields.
 
@@ -147,7 +179,7 @@ Both files have `REPLACE_WITH_*` placeholders; running with the placeholder valu
 - Meeting status is the canonical state machine; all transitions go through `StatusModule` / worker — don't write status fields directly from feature modules.
 - Provider selection lives in the factory inside the matching `jobs/*.ts` file — don't branch on `AI_PROVIDER` / `LLM_PROVIDER` outside that one place.
 - **No silent mock fallback.** Real providers must throw on failure; BullMQ retries; `apps/worker/src/main.ts` `failed` handler marks the meeting `FAILED` with `failureReason` after the final attempt. Mock providers are dev-only — selected explicitly via env, never as a fallback.
-- **Worker preflight** (`apps/worker/src/preflight.ts`) runs at boot and refuses to start if `AI_PROVIDER=whisper` but whisper is unreachable, or if `LLM_PROVIDER=claude` but `ANTHROPIC_API_KEY` is missing/malformed. Run `npm run doctor` for the same checks before starting.
+- **Worker preflight** (`apps/worker/src/preflight.ts`) runs at boot and refuses to start if `AI_PROVIDER=whisper` but whisper is unreachable, or if the selected LLM provider's key is missing/malformed (`claude` → `sk-ant-`, `openrouter` → `sk-or-`). Run `npm run doctor` for the same checks before starting.
 - Documentation in `docs/` is authoritative for product/architecture decisions; update it when behavior changes. Files used most often:
   - [docs/02_ARCHITECTURE.md](docs/02_ARCHITECTURE.md) — system architecture
   - [docs/03_ERD_DATABASE.md](docs/03_ERD_DATABASE.md) — ERD + Prisma model rationale

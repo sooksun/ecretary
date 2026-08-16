@@ -4,6 +4,8 @@ import { ChunkUploadStatus } from '@/types/domain';
 import { chunksApi } from '@/api/chunks';
 import { meetingRepo } from '@/db/meetingRepo';
 import { meetingsApi } from '@/api/meetings';
+import { markerRepo } from '@/db/markerRepo';
+import { markersApi } from '@/api/markers';
 import { useAuthStore } from '@/store/auth';
 
 const BACKOFF_BASE_MS = 5_000;
@@ -36,6 +38,12 @@ export class UploadQueueService {
     this.timer = null;
   }
 
+  /** Reset FAILED_FINAL chunks for a meeting back to QUEUED, then upload. */
+  async forceRetry(meetingId: string): Promise<void> {
+    await chunkRepo.resetFailedForMeeting(meetingId);
+    await this.tick();
+  }
+
   /** Force a manual tick (used by Recording screen "retry now"). */
   async tick(): Promise<void> {
     if (this.running) return;
@@ -45,14 +53,63 @@ export class UploadQueueService {
       const online = await this.isOnline();
       if (!online) return;
 
-      // Sync pending meeting start/end actions before uploading chunks.
+      // 1. Sync meetings created offline (where serverId is null)
+      const unsynced = await meetingRepo.listUnsynced();
+      for (const m of unsynced) {
+        try {
+          const remote = await meetingsApi.create({
+            title: m.title,
+            meetingType: m.meetingType,
+            location: m.location ?? undefined,
+            agendaText: m.agendaText ?? undefined,
+          });
+          await meetingRepo.setServerId(m.id, remote.id);
+          if (m.startedAt) {
+            await meetingRepo.setPendingSync(m.id, 'start');
+          }
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('[upload-sync] failed to sync meeting creation', m.id, err);
+        }
+      }
+
+      // 2. Sync pending meeting start/end actions before uploading chunks.
       const pendingSyncs = await meetingRepo.listPendingSync();
       for (const m of pendingSyncs) {
         if (!m.serverId) continue; // server not yet assigned — retry next tick
         try {
-          if (m.pendingSync === 'start') await meetingsApi.start(m.serverId);
-          else if (m.pendingSync === 'end') await meetingsApi.end(m.serverId);
-          await meetingRepo.setPendingSync(m.id, null);
+          if (m.pendingSync === 'start') {
+            await meetingsApi.start(m.serverId);
+            if (m.endedAt) {
+              await meetingRepo.setPendingSync(m.id, 'end');
+            } else {
+              await meetingRepo.setPendingSync(m.id, null);
+            }
+          } else if (m.pendingSync === 'end') {
+            const chunks = await chunkRepo.listByMeeting(m.id);
+            await meetingsApi.end(m.serverId, chunks.length);
+            await meetingRepo.setPendingSync(m.id, null);
+          }
+        } catch {
+          // will retry next tick
+        }
+      }
+
+      // Sync locally-stored markers to the server.
+      // Markers are written immediately on tap (markerRepo.add) but only
+      // uploaded here so the summarizer receives them. We only upload a marker
+      // once we know the server meeting id exists.
+      const pendingMarkers = await markerRepo.listPendingSync();
+      for (const marker of pendingMarkers) {
+        const meeting = await meetingRepo.getById(marker.meetingId);
+        if (!meeting?.serverId) continue; // wait until meeting is synced
+        try {
+          await markersApi.create(meeting.serverId, {
+            markerType: marker.markerType,
+            timestampSec: marker.timestampSec,
+            note: marker.note,
+          });
+          await markerRepo.markSynced(marker.id);
         } catch {
           // will retry next tick
         }

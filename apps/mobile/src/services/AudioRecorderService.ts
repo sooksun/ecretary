@@ -1,5 +1,4 @@
-import * as FileSystem from 'expo-file-system';
-import * as Crypto from 'expo-crypto';
+
 import { Platform } from 'react-native';
 import { PermissionsAndroid } from 'react-native';
 import { MSecRecorder, NativeChunkReadyEvent } from 'm-secretary-recorder';
@@ -31,8 +30,10 @@ export interface RecorderEvents {
  *     identical to the previous JS recorder, so we keep one path)
  *   - state book-keeping for the UI (elapsedSec / chunkIndex)
  *
- * The native side is Android-only. iOS is out of M5 scope; keep the
- * fallback note here so screens fail loudly instead of hanging.
+ * Both platforms are native now: Android runs a Foreground Service
+ * (Kotlin, gapless via setNextOutputFile), iOS runs an AVAudioRecorder
+ * engine with stop/restart rotation (ios/MSecRecorderModule.swift).
+ * iOS mic permission is requested inside the native start().
  */
 export class AudioRecorderService {
   private chunkIndex = 0;
@@ -53,9 +54,6 @@ export class AudioRecorderService {
 
   async start(events: RecorderEvents): Promise<void> {
     if (this.state !== 'idle') throw new Error('Recorder already started');
-    if (Platform.OS !== 'android') {
-      throw new Error('Native recorder is Android-only (M5). iOS path TBD.');
-    }
     this.events = events;
     await this.requestPermissions();
 
@@ -133,7 +131,6 @@ export class AudioRecorderService {
 
   private async handleNativeChunk(e: NativeChunkReadyEvent): Promise<void> {
     try {
-      const checksum = await this.checksum(e.fileUri);
       this.chunkIndex = e.chunkIndex + 1;
       await this.events?.onChunkReady({
         chunkIndex: e.chunkIndex,
@@ -142,32 +139,10 @@ export class AudioRecorderService {
         fileSizeBytes: e.fileSizeBytes,
         startedAtSec: e.startedAtSec,
         endedAtSec: e.endedAtSec,
-        checksumSha256: checksum,
+        checksumSha256: e.checksumSha256,
       });
     } catch (err) {
       this.events?.onError?.(err as Error);
-    }
-  }
-
-  private async checksum(uri: string): Promise<string | undefined> {
-    try {
-      // Read file as Base64, then decode to raw bytes before hashing.
-      // digestStringAsync would hash the Base64 characters (not the binary),
-      // which never matches the server-side crypto.createHash('sha256').update(buffer).
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const binaryStr = atob(base64);
-      const bytes = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
-      }
-      const hashBuf = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, bytes);
-      return Array.from(new Uint8Array(hashBuf))
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
-    } catch {
-      return undefined;
     }
   }
 }

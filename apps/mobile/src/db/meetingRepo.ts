@@ -88,6 +88,33 @@ export const meetingRepo = {
     );
   },
 
+  /**
+   * Adopt the server's status for rows we've already pushed (server_id set).
+   * Returns how many rows actually changed, so callers can skip a re-render.
+   *
+   * RECORDING is never overwritten: while the device is recording it owns that
+   * state, and the server still holds the meeting at DRAFT/RECORDING until the
+   * chunks land. Every state after upload (TRANSCRIBING → SUMMARIZING →
+   * READY/FAILED) is decided by the backend, so there the server value wins.
+   */
+  async applyServerStatuses(byServerId: Record<string, string>): Promise<number> {
+    const entries = Object.entries(byServerId);
+    if (entries.length === 0) return 0;
+    const db = await getDb();
+    const now = new Date().toISOString();
+    let changed = 0;
+    for (const [serverId, status] of entries) {
+      const res = await db.runAsync(
+        `UPDATE local_meetings
+            SET status = ?, updated_at = ?
+          WHERE server_id = ? AND status <> ? AND status <> ?`,
+        [status, now, serverId, status, MeetingStatus.RECORDING],
+      );
+      changed += res.changes ?? 0;
+    }
+    return changed;
+  },
+
   async setServerId(id: string, serverId: string): Promise<void> {
     const db = await getDb();
     await db.runAsync(
@@ -133,6 +160,14 @@ export const meetingRepo = {
     const db = await getDb();
     const rows = (await db.getAllAsync<MeetingRow>(
       `SELECT * FROM local_meetings WHERE pending_sync IS NOT NULL`,
+    )) as MeetingRow[];
+    return rows.map(fromRow);
+  },
+
+  async listUnsynced(): Promise<LocalMeeting[]> {
+    const db = await getDb();
+    const rows = (await db.getAllAsync<MeetingRow>(
+      `SELECT * FROM local_meetings WHERE server_id IS NULL`,
     )) as MeetingRow[];
     return rows.map(fromRow);
   },

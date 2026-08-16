@@ -83,5 +83,6 @@ export type UserRole = (typeof UserRole)[keyof typeof UserRole];
 export const QueueName = {
   TRANSCRIBE: 'transcribe',
   SUMMARIZE: 'summarize',
+  SWEEP: 'sweep',
 } as const;
 export type QueueName = (typeof QueueName)[keyof typeof QueueName];

@@ -135,6 +135,16 @@ async function main(): Promise<void> {
         'claude',
         `key set (${k.slice(0, 11)}…), model=${process.env.LLM_MODEL ?? 'claude-sonnet-4-6'}`,
       );
+  } else if (llm === 'openrouter') {
+    const k = process.env.OPENROUTER_API_KEY;
+    if (!k) fail('openrouter', 'LLM_PROVIDER=openrouter but OPENROUTER_API_KEY missing');
+    else if (!k.startsWith('sk-or-'))
+      fail('openrouter', 'OPENROUTER_API_KEY does not start with "sk-or-"');
+    else
+      pass(
+        'openrouter',
+        `key set (${k.slice(0, 11)}…), model=${process.env.LLM_MODEL ?? 'anthropic/claude-sonnet-4.5'}`,
+      );
   } else if (llm === 'mock') {
     warn('claude', 'LLM_PROVIDER=mock — summaries will be GENERIC TEMPLATE TEXT');
   }

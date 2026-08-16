@@ -1,6 +1,7 @@
 import type { Job } from 'bullmq';
 import { Queue } from 'bullmq';
-import { JobStatus, ChunkUploadStatus, MeetingStatus, QueueName } from '@msec/shared';
+import { jobId } from '@msec/shared';
+import { TERMINAL_OR_LATER_STATUSES } from '../meetingConstants';
 import { JobStatus as PrismaJobStatus, ChunkUploadStatus as PrismaChunkStatus, MeetingStatus as PrismaMeetingStatus } from '@prisma/client';
 import { prisma } from '../prisma';
 import { logger } from '../logger';
@@ -52,13 +53,18 @@ export async function handleTranscribeJob(
     },
   });
 
-  // Reset failureReason whenever a chunk starts processing — a retry after
-  // infra was fixed must not leave a stale "whisper unreachable" reason on a
-  // meeting that successfully completes this attempt.
-  await prisma.meeting.update({
-    where: { id: meetingId },
+  // Guard against regressing a meeting that already reached a terminal/later
+  // state (READY, FAILED, ARCHIVED, SUMMARIZING). A stale BullMQ retry or a
+  // forceProcess re-enqueue must not flip a finished meeting back to
+  // TRANSCRIBING. If count===0 the meeting has progressed — skip this chunk.
+  const { count: resetCount } = await prisma.meeting.updateMany({
+    where: { id: meetingId, status: { notIn: TERMINAL_OR_LATER_STATUSES } },
     data: { status: PrismaMeetingStatus.TRANSCRIBING, failureReason: null },
   });
+  if (resetCount === 0) {
+    logger.warn({ chunkId, meetingId }, 'transcribe.skipped: meeting already in terminal/later state');
+    return;
+  }
 
   try {
     const p = getProvider();
@@ -123,21 +129,29 @@ export async function handleTranscribeJob(
 }
 
 async function maybeQueueSummary(meetingId: string, summarizeQueue: Queue): Promise<void> {
+  const meeting = await prisma.meeting.findUnique({
+    where: { id: meetingId },
+    select: { status: true, endedAt: true, totalChunks: true },
+  });
+
+  if (!meeting || !meeting.endedAt || meeting.totalChunks === null) {
+    return;
+  }
+
   const counts = await prisma.audioChunk.groupBy({
     by: ['transcribeStatus'],
     where: { meetingId },
     _count: { _all: true },
   });
-  const total = counts.reduce((acc, c) => acc + c._count._all, 0);
   const completed = counts.find((c) => c.transcribeStatus === PrismaJobStatus.COMPLETED)?._count._all ?? 0;
-  if (total === 0 || completed !== total) return;
+  if (completed < meeting.totalChunks) return;
 
-  // Atomic TRANSCRIBING → SUMMARIZING transition.
+  // Atomic TRANSCRIBING/UPLOADING → SUMMARIZING transition.
   // Only the worker that successfully flips the status enqueues the job.
   // If a concurrent worker already flipped (count === 0), this worker exits quietly
   // — no duplicate summarize job is queued.
   const { count } = await prisma.meeting.updateMany({
-    where: { id: meetingId, status: PrismaMeetingStatus.TRANSCRIBING },
+    where: { id: meetingId, status: { in: [PrismaMeetingStatus.TRANSCRIBING, PrismaMeetingStatus.UPLOADING] } },
     data: { status: PrismaMeetingStatus.SUMMARIZING },
   });
   if (count === 0) return;
@@ -145,7 +159,13 @@ async function maybeQueueSummary(meetingId: string, summarizeQueue: Queue): Prom
   await summarizeQueue.add(
     'summarize-meeting',
     { meetingId },
-    { attempts: 3, backoff: { type: 'exponential', delay: 10_000 }, removeOnComplete: 100, removeOnFail: 100 },
+    {
+      jobId: jobId.summarize(meetingId),
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 10_000 },
+      removeOnComplete: 100,
+      removeOnFail: 100,
+    },
   );
   logger.info({ meetingId }, 'transcribe.queuedSummary');
 }

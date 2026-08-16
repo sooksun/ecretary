@@ -48,14 +48,14 @@ export async function runPreflight(): Promise<PreflightResult> {
   // a wall of secondary failures in front of it.
   refuseMockInProduction();
 
-  const [whisper, claude] = await Promise.all([checkWhisper(), checkClaude()]);
+  const [whisper, llm] = await Promise.all([checkWhisper(), checkLlm()]);
 
   // Combined-throw branch first so the success branch can spread .patch
   // without TS narrowing complaints from the discriminated union.
-  if (!whisper.ok || !claude.ok) {
+  if (!whisper.ok || !llm.ok) {
     const reasons = [
       whisper.ok ? null : whisper.reason,
-      claude.ok ? null : claude.reason,
+      llm.ok ? null : llm.reason,
     ].filter((r): r is string => r !== null);
     throw new Error('preflight failed:\n  - ' + reasons.join('\n  - '));
   }
@@ -65,7 +65,7 @@ export async function runPreflight(): Promise<PreflightResult> {
     llmProvider: config.llmProvider,
     llmModel: config.llmModel,
     ...whisper.patch,
-    ...claude.patch,
+    ...llm.patch,
   };
 }
 
@@ -129,16 +129,54 @@ async function checkWhisper(): Promise<
 }
 
 // ── llm ────────────────────────────────────────────────────────────
-async function checkClaude(): Promise<
+async function checkLlm(): Promise<
   CheckResult<'anthropicKeyPresent' | 'anthropicLiveCheck'>
 > {
-  if (config.llmProvider !== 'claude') {
-    if (config.llmProvider === 'mock') {
-      logger.warn(
-        {},
-        '⚠ LLM_PROVIDER=mock — summaries will be GENERIC TEMPLATE TEXT, not based on transcript',
-      );
+  if (config.llmProvider === 'mock') {
+    logger.warn(
+      {},
+      '⚠ LLM_PROVIDER=mock — summaries will be GENERIC TEMPLATE TEXT, not based on transcript',
+    );
+    return { ok: true, patch: {} };
+  }
+
+  if (config.llmProvider === 'openrouter') {
+    const key = process.env.OPENROUTER_API_KEY;
+    if (!key) {
+      return {
+        ok: false,
+        reason:
+          'LLM_PROVIDER=openrouter but OPENROUTER_API_KEY is not set. ' +
+          'Add it to the root .env (NOT apps/worker/.env — that file is overwritten by sync:env).',
+      };
     }
+    if (!key.startsWith('sk-or-')) {
+      return {
+        ok: false,
+        reason: `OPENROUTER_API_KEY does not look like an OpenRouter key (expected prefix "sk-or-", got "${key.slice(0, 10)}...")`,
+      };
+    }
+    return { ok: true, patch: {} };
+  }
+
+  if (config.llmProvider === 'openai' || config.llmProvider === 'deepseek') {
+    const key = config.openaiApiKey;
+    if (!key) {
+      return {
+        ok: false,
+        reason:
+          `LLM_PROVIDER=${config.llmProvider} but OPENAI_API_KEY / DEEPSEEK_API_KEY is not set. ` +
+          'Add it to the root .env file.',
+      };
+    }
+    return { ok: true, patch: {} };
+  }
+
+  if (config.llmProvider === 'ollama') {
+    return { ok: true, patch: {} };
+  }
+
+  if (config.llmProvider !== 'claude') {
     return { ok: true, patch: {} };
   }
 
@@ -158,10 +196,6 @@ async function checkClaude(): Promise<
     };
   }
 
-  // Live 1-token ping. Catches expired/revoked/typo'd-after-prefix keys
-  // and invalid model IDs immediately, instead of letting every summarize
-  // job burn 3 attempts × 10s exponential backoff before the meeting
-  // finally goes FAILED ~30 minutes later. Costs ~$0.0001/boot.
   try {
     const live = await pingAnthropic(key, config.llmModel);
     return {

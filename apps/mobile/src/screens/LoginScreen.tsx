@@ -5,7 +5,7 @@ import { useAuthStore } from '@/store/auth';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('admin@msecretary.local');
-  const [password, setPassword] = useState('');
+  const [password, setPassword] = useState('admin1234');
   const [busy, setBusy] = useState(false);
   const setSession = useAuthStore((s) => s.setSession);
 
@@ -18,10 +18,11 @@ export default function LoginScreen() {
     try {
       const res = await apiLogin(email.trim(), password);
       await setSession(res.accessToken, res.user);
-    } catch (err: unknown) {
-      const msg =
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
-        'เข้าสู่ระบบไม่สำเร็จ';
+    } catch (err) {
+      // Axios puts the API's message under response.data.message; fall back to
+      // the transport error (offline, DNS, timeout) so the user still sees why.
+      const axiosErr = err as { response?: { data?: { message?: string } }; message?: string };
+      const msg = axiosErr.response?.data?.message ?? axiosErr.message ?? String(err);
       Alert.alert('เข้าสู่ระบบไม่สำเร็จ', msg);
     } finally {
       setBusy(false);

@@ -41,6 +41,21 @@ apps/mobile/ios/build/
 apps/mobile/android/build/
 apps/mobile/android/app/build/
 apps/mobile/android/.gradle/
+# Restored by `pod install`; 300 MB of vendored sources do not belong in git.
+# The Xcode project + Podfile.lock ARE tracked, so the install is reproducible.
+apps/mobile/ios/Pods/
+apps/mobile/ios/*.xcworkspace/xcuserdata/
+apps/mobile/ios/*.xcodeproj/xcuserdata/
+# Gradle cache inside the local Expo module
+apps/mobile/modules/*/android/.gradle/
+
+# python
+__pycache__/
+*.pyc
+
+# local dev artifacts
+dump.rdb
+test-chunk.wav
 
 # minio / docker volumes
 infra/data/

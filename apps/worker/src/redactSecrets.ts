@@ -9,7 +9,27 @@
 // short prefix so the user/operator can still recognize *what kind* of
 // secret was redacted, which is useful when triaging the failure.
 
-const PATTERNS: { rx: RegExp; replace: string }[] = [
+/**
+ * Used by the two generic `<label>=<value>` patterns at the end of the list.
+ * An earlier, more specific pattern may already have turned the value into
+ * `sk-ant-***` / `AKIA***`; re-replacing it with a bare `***` would erase the
+ * very hint this module promises to keep. Already-redacted values pass through
+ * untouched — the secret is gone either way, only the label survives.
+ */
+function redactUnlessAlreadyRedacted(
+  whole: string,
+  prefix: string,
+  ...groups: (string | undefined)[]
+): string {
+  const value = groups.find((g) => g !== undefined) ?? '';
+  return value.includes('***') ? whole : `${prefix}***`;
+}
+
+type Pattern =
+  | { rx: RegExp; replace: string }
+  | { rx: RegExp; replaceFn: (whole: string, prefix: string, ...g: (string | undefined)[]) => string };
+
+const PATTERNS: Pattern[] = [
   // Anthropic keys: sk-ant-api03-…  /  sk-ant-admin01-…
   { rx: /sk-ant-[A-Za-z0-9_-]+/g, replace: 'sk-ant-***' },
   // OpenAI keys: sk-…  /  sk-proj-…
@@ -32,19 +52,22 @@ const PATTERNS: { rx: RegExp; replace: string }[] = [
   // password=<value>  /  password: "<value>"  /  password: '<value>'
   {
     rx: /(password\s*[:=]\s*)(?:"([^"]*)"|'([^']*)'|(\S+))/gi,
-    replace: '$1***',
+    replaceFn: redactUnlessAlreadyRedacted,
   },
   // Generic api_key / apikey / api-key / token = <value>
   {
     rx: /((?:api[_-]?key|apikey|token)\s*[:=]\s*)(?:"([^"]*)"|'([^']*)'|(\S+))/gi,
-    replace: '$1***',
+    replaceFn: redactUnlessAlreadyRedacted,
   },
 ];
 
 export function redactSecrets(input: string): string {
   let out = input;
-  for (const { rx, replace } of PATTERNS) {
-    out = out.replace(rx, replace);
+  for (const p of PATTERNS) {
+    out =
+      'replaceFn' in p
+        ? out.replace(p.rx, p.replaceFn as (...args: string[]) => string)
+        : out.replace(p.rx, p.replace);
   }
   return out;
 }

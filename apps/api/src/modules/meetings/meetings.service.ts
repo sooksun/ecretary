@@ -1,14 +1,22 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { StorageService } from '../../storage/storage.service';
 import type { CreateMeetingDto, UpdateMeetingDto } from '@msec/shared';
 import { MeetingStatus, MeetingType as SharedMeetingType } from '@msec/shared';
 import { MeetingStatus as PrismaMeetingStatus, MeetingType as PrismaMeetingType } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
 import { computeMeetingProvenance } from '../../common/meeting-provenance';
+import { AuditService, AuditAction, AuditResource } from '../../common/audit/audit.service';
 
 @Injectable()
 export class MeetingsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(MeetingsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+    private readonly audit: AuditService,
+  ) {}
 
   async create(dto: CreateMeetingDto, actor: AuthUser) {
     return this.prisma.meeting.create({
@@ -34,7 +42,10 @@ export class MeetingsService {
     });
   }
 
-  async list(query: { status?: string; q?: string; from?: string; to?: string }, orgId: string) {
+  async list(
+    query: { status?: string; q?: string; from?: string; to?: string; cursor?: string; limit?: number },
+    orgId: string,
+  ) {
     if (query.status && !Object.values(PrismaMeetingStatus).includes(query.status as PrismaMeetingStatus)) {
       throw new BadRequestException(`Invalid status value: "${query.status}". Valid values: ${Object.values(PrismaMeetingStatus).join(', ')}`);
     }
@@ -46,19 +57,24 @@ export class MeetingsService {
     if (toDate && isNaN(toDate.getTime())) {
       throw new BadRequestException(`Invalid "to" date: "${query.to}"`);
     }
-    return this.prisma.meeting.findMany({
+    const limit = Math.min(query.limit ?? 50, 100);
+
+    const rows = await this.prisma.meeting.findMany({
       where: {
         organizationId: orgId,
         status: query.status ? (query.status as PrismaMeetingStatus) : undefined,
         title: query.q ? { contains: query.q, mode: 'insensitive' } : undefined,
-        createdAt: {
-          gte: fromDate,
-          lte: toDate,
-        },
+        createdAt: { gte: fromDate, lte: toDate },
       },
       orderBy: { createdAt: 'desc' },
-      take: 100,
+      take: limit + 1,
+      ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
     });
+
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, limit) : rows;
+    const nextCursor = hasMore ? items[items.length - 1].id : null;
+    return { items, nextCursor };
   }
 
   async getById(id: string, orgId: string) {
@@ -114,15 +130,68 @@ export class MeetingsService {
     });
   }
 
-  async end(id: string, orgId: string) {
+  async end(id: string, orgId: string, totalChunks?: number) {
     await this.assertExists(id, orgId);
     return this.prisma.meeting.update({
       where: { id },
       data: {
         status: PrismaMeetingStatus.UPLOADING,
         endedAt: new Date(),
+        totalChunks: totalChunks ?? null,
       },
     });
+  }
+
+  async delete(id: string, orgId: string, actorUserId: string | null = null): Promise<void> {
+    const meeting = await this.assertExists(id, orgId);
+
+    // Collect S3 keys BEFORE the cascade delete removes child rows.
+    // Both queries are independent — run in parallel.
+    const [chunks, exportFiles] = await Promise.all([
+      this.prisma.audioChunk.findMany({
+        where: { meetingId: id },
+        select: { filePath: true },
+      }),
+      this.prisma.exportFile.findMany({
+        where: { meetingId: id },
+        select: { filePath: true },
+      }),
+    ]);
+    const keys = [
+      ...chunks.map((c) => c.filePath),
+      ...exportFiles.map((e) => e.filePath),
+    ];
+
+    // Scope the delete to this org so the operation is self-authorising even
+    // if a future change to assertExists() introduces a bug.
+    await this.prisma.meeting.deleteMany({ where: { id, organizationId: orgId } });
+
+    // Recorded AFTER the delete succeeds: an audit trail that lists deletions
+    // which never happened is worse than one that is merely incomplete.
+    // The title is kept because the row it identifies no longer exists.
+    await this.audit.record({
+      actorUserId,
+      action: AuditAction.MEETING_DELETE,
+      resourceType: AuditResource.MEETING,
+      resourceId: id,
+      metadata: {
+        title: meeting.title,
+        organizationId: orgId,
+        audioChunksDeleted: chunks.length,
+        exportFilesDeleted: exportFiles.length,
+      },
+    });
+
+    // Best-effort S3 cleanup — orphaned objects are acceptable but DB rows
+    // pointing to deleted objects are not, so we delete DB first.
+    if (keys.length > 0) {
+      void this.storage.deleteObjects(keys).catch((err) => {
+        this.logger.warn(
+          { meetingId: id, err: (err as Error).message },
+          'meeting.delete.s3Cleanup.failed',
+        );
+      });
+    }
   }
 
   async setStatus(id: string, status: MeetingStatus) {
@@ -132,11 +201,14 @@ export class MeetingsService {
     });
   }
 
+  /** Returns the row so callers that need identifying fields (e.g. the audit
+   *  trail, which must record what was destroyed) don't re-query. */
   private async assertExists(id: string, orgId: string) {
     const exists = await this.prisma.meeting.findFirst({
       where: { id, organizationId: orgId },
-      select: { id: true },
+      select: { id: true, title: true },
     });
     if (!exists) throw new NotFoundException('Meeting not found');
+    return exists;
   }
 }

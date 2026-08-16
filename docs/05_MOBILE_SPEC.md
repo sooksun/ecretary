@@ -150,6 +150,27 @@ CREATE TABLE local_markers (
 - Never keep entire audio in memory
 - Always persist chunk metadata immediately after a chunk starts and after it stops
 
+### Chunk boundary behaviour (platform difference)
+
+| Platform | Boundary | Audio lost |
+|---|---|---|
+| Android 8+ | `MediaRecorder.setNextOutputFile()` | None — gapless |
+| iOS | Continuous `AVAudioEngine` tap → rotating `AVAssetWriter` | None — gapless |
+| iOS (fallback) | AVAudioRecorder stopped and restarted | ~100 ms per boundary |
+
+**iOS is now gapless too.** One continuous input tap feeds a chain of `AVAssetWriter`s; the next chunk's writer is opened a chunk ahead and swapped in under a lock on the audio thread. A tap buffer straddling a boundary is split so chunk durations tile the timeline exactly.
+
+The earlier attempts failed for a reason that had nothing to do with the Simulator or with the hand-built `CMSampleBuffer`: **`AVEncoderBitRateKey = 64000` is out of range for AAC-LC mono at a 16 kHz output rate.** The encoder's own `applicableEncodeBitRates` for 16 kHz mono is {12, 16, 20, 24, 28, 32, 40, 48} kbps. Requesting 64 kbps makes `AVAssetWriter` reject appended buffers with `AVFoundationErrorDomain -11861` / `FigExport -12651`. `AVAudioRecorder` never surfaced this because it silently clamps the requested bit rate — so the documented "64 kbps" was never actually being produced at 16 kHz on either strategy. The module now asks the encoder at runtime and clamps (48 kbps on every runtime measured so far).
+
+AAC priming is not lost audio: encoding N frames and decoding back returns exactly N frames. `AVURLAsset.duration` reads ~132 ms short per chunk because of the priming edit list, but every sample is present — so a boundary costs nothing.
+
+A `diagnostics()` call on the native module reports the encoder's real capabilities and which strategy is active. If the encoder probe at `start()` ever rejects these settings on some runtime, the module falls back to the old AVAudioRecorder rotation automatically, so recording never breaks.
+
+Writing PCM chunks instead would also be gapless but quadruples upload size, which conflicts with the low-bandwidth target in the PRD.
+
+Implementation notes and the exact CoreAudio error codes are recorded in the header comment of
+`apps/mobile/modules/m-secretary-recorder/ios/MSecRecorderModule.swift` and in the root `CLAUDE.md`.
+
 ## Upload Queue Rules
 
 - Upload only chunks with status `queued` or `failed_retry`
